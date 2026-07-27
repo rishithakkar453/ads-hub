@@ -1,0 +1,6 @@
+# User data — never commit: contains the saved API key (data/secret.key),
+# the store snapshot and uploaded project files (videos etc.)
+data/
+
+# runtime logs
+*.log
