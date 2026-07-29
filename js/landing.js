@@ -133,6 +133,7 @@ window.Ads = window.Ads || {};
       subhead: content.subhead || item.hook || site.description || '',
       intro: content.intro || '',
       sections: secs,
+      closer: content.closer || null,   // {title, line, cta} — the final push toward the site
       cta: content.cta || s.cta || 'Visit us',
       accent: /^#[0-9a-f]{6}$/i.test(s.accent || '') ? s.accent : '#ff7a3c',
       brand: s.brand || opts.brandName || (site.siteName || '') || 'Us',
@@ -166,7 +167,9 @@ window.Ads = window.Ads || {};
       '.badge{display:inline-block;color:' + A + ';border:1px solid ' + A + '55;padding:6px 15px;border-radius:99px;font-size:12px;letter-spacing:.07em;text-transform:uppercase;margin-bottom:22px}' +
       'h1{font-size:60px;margin-bottom:20px}' +
       '.hook{font-size:20px;color:' + P.muted + ';margin-bottom:20px;max-width:52ch;line-height:1.5}' +
-      '.lead-intro{font-size:16.5px;color:' + P.muted + ';margin-bottom:30px;max-width:52ch;line-height:1.65}' +
+      '.lead-intro{margin-bottom:30px;max-width:52ch}' +
+      '.lead-intro p{font-size:16.5px;color:' + P.muted + ';line-height:1.65;margin:0 0 14px}' +
+      '.lead-intro p:last-child{margin-bottom:0}' +
       '.cta-row{display:flex;align-items:center;gap:22px;flex-wrap:wrap}' +
       '.cta{display:inline-block;background:' + A + ';color:' + P.onA + ';padding:16px 34px;border-radius:12px;font-weight:600;text-decoration:none;font-size:16px;transition:filter .2s}' +
       '.cta:hover{filter:brightness(1.08)}' +
@@ -181,9 +184,17 @@ window.Ads = window.Ads || {};
       '.kicker{font-size:12px;font-weight:600;letter-spacing:.15em;text-transform:uppercase;color:' + A + ';margin-bottom:12px}' +
       'h2{font-size:34px;margin-bottom:16px;max-width:20ch}' +
       '.lead{color:' + P.muted + ';font-size:17.5px;line-height:1.7;max-width:68ch}' +
-      // gallery
+      '.prose-block .lead{margin:0 0 18px}' +
+      '.prose-block .lead:last-child{margin-bottom:0}' +
+      '.pts{list-style:none;margin:24px 0 0;padding:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr));gap:12px 34px;max-width:76ch}' +
+      '.pts li{position:relative;padding-left:28px;color:' + P.muted + ';font-size:16px;line-height:1.6}' +
+      '.pts li:before{content:"";position:absolute;left:0;top:8px;width:9px;height:9px;border-radius:50%;background:' + A + '}' +
+      // gallery + interleaved scroll imagery
       '.gal{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:20px}' +
       '.gal img{width:100%;border-radius:14px;box-shadow:0 18px 40px ' + P.shadow + '}' +
+      '.band-media{padding:0 0 66px;border-top:none}' +
+      '.mid-media{margin:0;max-width:880px}' +
+      '.mid-media img{width:100%;border-radius:18px;box-shadow:0 30px 70px ' + P.shadow + '}' +
       // closing cta
       '.closing{border-top:none}' +
       '.cta-band{position:relative;overflow:hidden;background:linear-gradient(135deg,' + A + ' 0%,' + P.ctaEnd + ' 145%);border-radius:24px;padding:64px 44px;text-align:center}' +
@@ -194,6 +205,19 @@ window.Ads = window.Ads || {};
       'footer{padding:34px 0;color:' + P.muted + ';font-size:14px;border-top:1px solid ' + P.line + '}' +
       'footer a{color:' + A + ';text-decoration:none}' +
       '@media(max-width:860px){.hero{grid-template-columns:1fr;gap:34px;padding:36px 0 54px}h1{font-size:40px}h2{font-size:28px}.stage{max-width:440px;margin:0 auto}}';
+  }
+
+  // long-form copy arrives as blank-line-separated paragraphs — render each as
+  // its own <p> so the page reads like a real article, not a wall
+  function paraHTML(t, text, cls) {
+    return String(text || '').split(/\n{2,}/).map(function (p) {
+      p = p.trim();
+      return p ? '<p' + (cls ? ' class="' + cls + '"' : '') + '>' + t(p) + '</p>' : '';
+    }).join('');
+  }
+  function pointsHTML(t, points, cls) {
+    if (!Array.isArray(points) || !points.length) return '';
+    return '<ul class="' + (cls || 'pts') + '">' + points.map(function (x) { return '<li>' + t(x) + '</li>'; }).join('') + '</ul>';
   }
 
   // shared section builder; t(text) renders a text node per flavour; imgTag =
@@ -209,28 +233,35 @@ window.Ads = window.Ads || {};
       (m.badge ? '<div class="badge">' + t(m.badge) + '</div>' : '') +
       '<h1>' + t(m.headline) + '</h1>' +
       (m.subhead ? '<p class="hook">' + t(m.subhead) + '</p>' : '') +
-      (m.intro ? '<p class="lead-intro">' + t(m.intro) + '</p>' : '') +
+      (m.intro ? '<div class="lead-intro">' + paraHTML(t, m.intro) + '</div>' : '') +
       '<div class="cta-row"><a class="cta" href="' + esc(m.url) + '">' + t(m.cta) + '</a>' +
         (m.sections.length ? '<a class="ghostlink" href="#more">' + t('Read on ↓') + '</a>' : '') +
       '</div>' +
       '</div><div class="stage">' + imgTag + '</div></div></div></div>';
-    // AI-written, first-person sections
+    // AI-written, first-person sections — real imagery INTERLEAVED as the
+    // reader scrolls (one image per couple of sections), never all up top
+    var nextImg = 0;
     m.sections.forEach(function (sec, i) {
       h += '<section' + (i % 2 === 0 ? ' class="band-tint"' : '') + (i === 0 ? ' id="more"' : '') + '><div class="wrap">' +
         (sec.kicker ? '<div class="kicker">' + t(sec.kicker) + '</div>' : '') +
         (sec.title ? '<h2>' + t(sec.title) + '</h2>' : '') +
-        (sec.body ? '<p class="lead">' + t(sec.body) + '</p>' : '') +
+        (sec.body ? '<div class="prose-block">' + paraHTML(t, sec.body, 'lead') + '</div>' : '') +
+        pointsHTML(t, sec.points) +
       '</div></section>';
+      if (i % 2 === 1 && nextImg < galleryTags.length) {
+        h += '<section class="band-media"><div class="wrap"><figure class="mid-media">' + galleryTags[nextImg++] + '</figure></div></section>';
+      }
     });
-    // real imagery from the site
-    if (galleryTags.length) {
+    // whatever imagery is left → a gallery before the close
+    if (nextImg < galleryTags.length) {
       h += '<section><div class="wrap"><div class="kicker">' + t('See for yourself') + '</div>' +
-        '<div class="gal">' + galleryTags.join('') + '</div></div></section>';
+        '<div class="gal">' + galleryTags.slice(nextImg).join('') + '</div></div></section>';
     }
-    // closing call to action
+    // closing call to action — the shared "come see us" push
+    var cl = m.closer || {};
     h += '<section class="closing"><div class="wrap"><div class="cta-band">' +
-      '<h2>' + t(m.headline) + '</h2>' +
-      (m.subhead ? '<p>' + t(m.subhead) + '</p>' : '') +
+      '<h2>' + t(cl.title || m.headline) + '</h2>' +
+      ((cl.line || m.subhead) ? '<p>' + t(cl.line || m.subhead) + '</p>' : '') +
       '<a class="cta" href="' + esc(m.url) + '">' + t(m.cta) + '</a></div></div></section>';
     h += '<footer><div class="wrap">' + t(m.brand) + (m.url !== '#' ? ' · <a href="' + esc(m.url) + '">' + t(m.url.replace(/^https?:\/\//, '')) + '</a>' : '') + '</div></footer>';
     return h;
@@ -404,6 +435,15 @@ window.Ads = window.Ads || {};
       '.prose{max-width:620px;display:flex;flex-direction:column;gap:18px}' +
       '.prose p{margin:0;font-size:16px;line-height:var(--lh-body);color:var(--text-body);text-wrap:pretty}' +
       '.prose h2{margin:14px 0 0;font-size:22px;font-weight:700;letter-spacing:-.01em;color:var(--text-strong)}' +
+      '.prose ul{list-style:none;margin:2px 0 0;padding:0;display:flex;flex-direction:column;gap:10px}' +
+      '.prose li{position:relative;padding-left:24px;font-size:16px;line-height:var(--lh-body);color:var(--text-body)}' +
+      '.prose li:before{content:"";position:absolute;left:0;top:9px;width:8px;height:8px;border-radius:50%;background:var(--accent)}' +
+      '.prose-media{margin:16px 0 6px;border-radius:var(--radius-md);overflow:hidden;box-shadow:var(--shadow-card)}' +
+      '.prose-media img{width:100%;display:block;filter:grayscale(1)}' +
+      '.closer{margin:8px 40px 44px;padding:38px 34px;border-radius:var(--radius-lg);background:linear-gradient(180deg,var(--sky-100) 0%,rgba(227,251,255,.35) 100%);border:1px solid var(--border-card);text-align:center}' +
+      '.closer h2{margin:0 0 12px;font-size:26px;font-weight:700;letter-spacing:var(--ls-tight);color:var(--text-strong);text-wrap:balance}' +
+      '.closer p{margin:0 auto 22px;font-size:16px;line-height:var(--lh-body);color:var(--text-body);max-width:52ch}' +
+      '.btn-big{padding:13px 28px;font-size:15.5px}' +
       '.foot{display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap;margin:0 40px;padding:26px 0 34px;border-top:1px solid var(--border-subtle)}' +
       '.foot-links{display:flex;align-items:center;gap:24px;flex-wrap:wrap}' +
       '.foot-links a{color:var(--link);font-size:14px;font-weight:500;text-decoration:none}' +
@@ -411,19 +451,34 @@ window.Ads = window.Ads || {};
       '.learn{display:inline-flex;align-items:center;gap:8px;background:var(--accent-soft);color:var(--sky-700);font-size:14.5px;font-weight:600;padding:11px 20px;border-radius:var(--radius-pill);text-decoration:none}' +
       '.learn:hover{filter:brightness(.96)}' +
       '.learn svg{width:16px;height:16px}' +
-      '@media (max-width:720px){.hero{grid-template-columns:1fr;gap:28px;padding:24px 22px 36px}.headline{font-size:36px}.nav-links{display:none}.nav,.body,.foot{padding-left:22px;padding-right:22px}.foot{margin:0 22px}}';
+      '@media (max-width:720px){.hero{grid-template-columns:1fr;gap:28px;padding:24px 22px 36px}.headline{font-size:36px}.nav-links{display:none}.nav,.body,.foot{padding-left:22px;padding-right:22px}.foot{margin:0 22px}.closer{margin:0 22px 32px;padding:28px 22px}}';
   }
   // fill the fixed 1B structure with this ad's content. t() escapes per flavour.
-  function cumulusMarkup(m, t, heroImgTag, L) {
+  // bodyImgTags: imagery revealed while scrolling — one every couple of sections
+  function cumulusMarkup(m, t, heroImgTag, L, bodyImgTags) {
+    bodyImgTags = bodyImgTags || [];
     var secs = m.sections || [];
     var eyebrow = (secs[0] && secs[0].kicker) || m.badge || 'The promise';
     var prose = '';
-    if (m.intro) prose += '<p>' + t(m.intro) + '</p>';
-    secs.forEach(function (s) {
+    if (m.intro) prose += paraHTML(t, m.intro);
+    var nextImg = 0;
+    secs.forEach(function (s, i) {
       if (s.title) prose += '<h2>' + t(s.title) + '</h2>';
-      if (s.body) prose += '<p>' + t(s.body) + '</p>';
+      if (s.body) prose += paraHTML(t, s.body);
+      prose += pointsHTML(t, s.points);
+      if (i % 2 === 1 && nextImg < bodyImgTags.length) {
+        prose += '<figure class="prose-media">' + bodyImgTags[nextImg++] + '</figure>';
+      }
     });
     if (!prose) prose = '<p>' + t(m.subhead || m.hook || '') + '</p>';
+    var cl = m.closer || {};
+    var closerHTML = (cl.title || cl.line)
+      ? '<section class="closer">' +
+          (cl.title ? '<h2>' + t(cl.title) + '</h2>' : '') +
+          (cl.line ? '<p>' + t(cl.line) + '</p>' : '') +
+          '<a class="btn btn-primary btn-big" href="' + esc(m.url !== '#' ? m.url : L.home) + '">' + t(m.cta || 'Visit us') + '</a>' +
+        '</section>'
+      : '';
     return '<main class="page">' +
       '<nav class="nav">' +
         '<a href="' + esc(L.home) + '" aria-label="Cumulus home">' + CUMULUS_LOGO + '</a>' +
@@ -440,6 +495,7 @@ window.Ads = window.Ads || {};
         (m.subhead ? '<p class="subhead">' + t(m.subhead) + '</p>' : '') +
       '</div><div class="hero-media">' + heroImgTag + '</div></section>' +
       '<section class="body"><div class="prose">' + prose + '</div></section>' +
+      closerHTML +
       '<footer class="foot"><div class="foot-links">' +
         '<a href="' + esc(L.home) + '">&larr; Back to Cumulus</a>' +
         '<a href="' + esc(L.product) + '">Product</a><a href="' + esc(L.people) + '">People</a>' +
@@ -447,11 +503,14 @@ window.Ads = window.Ads || {};
       '<a class="learn" href="' + esc(L.learn) + '">Learn more <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>' +
       '</footer></main>';
   }
-  function cumulusPageHTML(m, heroDataURL, opts, track) {
+  function cumulusPageHTML(m, heroDataURL, opts, track, galleryDataURLs) {
     var L = cumulusLinks(opts);
     var heroImg = heroDataURL
       ? '<img src="' + heroDataURL + '" alt="' + esc(m.headline || 'Cumulus') + '">'
       : '<div class="hero-image--placeholder">A memory worth keeping</div>';
+    // scroll imagery: the tool's real photos, minus whatever the hero already shows
+    var bodyImgTags = (galleryDataURLs || []).filter(function (u) { return u && u !== heroDataURL; })
+      .slice(0, 4).map(function (u) { return '<img src="' + u + '" alt="' + esc(m.brand || 'Cumulus') + '">'; });
     return '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n' +
       '<meta name="viewport" content="width=device-width, initial-scale=1">\n' +
       '<title>' + esc(m.headline) + ' · Cumulus</title>\n' +
@@ -459,7 +518,7 @@ window.Ads = window.Ads || {};
       '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>\n' +
       '<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400;1,500&display=swap" rel="stylesheet">\n' +
       '<style>' + cumulusCSS() + '</style>\n</head>\n<body>\n' +
-      cumulusMarkup(m, function (x) { return esc(String(x)); }, heroImg, L) +
+      cumulusMarkup(m, function (x) { return esc(String(x)); }, heroImg, L, bodyImgTags) +
       '\n' + beaconJS(m, track) +
       '\n</body>\n</html>\n';
   }
@@ -472,7 +531,7 @@ window.Ads = window.Ads || {};
     var style = landingStyle(opts);        // 'cumulus' → house template; else the generic design
     return resolveDesign(opts).then(function (design) {
       var zipFiles = [], pages = [], failed = [], usedSlugs = {};
-      var gallery = (opts.images || []).map(dataURLBytes).filter(Boolean).slice(0, 3);
+      var gallery = (opts.images || []).map(dataURLBytes).filter(Boolean).slice(0, 5);
       var galleryNames = gallery.map(function (gd, gi) { return 'gallery-' + (gi + 1) + '.' + gd.ext; });
       var i = 0;
       function uniqSlug(s) { var b = s, k = 1; while (usedSlugs[s]) s = b + '-' + (++k); usedSlugs[s] = 1; return s; }
@@ -486,8 +545,9 @@ window.Ads = window.Ads || {};
           return blobToDataURL(png).then(function (dataURL) {
             var html, jsx;
             if (style === 'cumulus') {
-              // ONE B&W photo (the ad's own visual), the fixed house layout, HTML only
-              html = cumulusPageHTML(m, cumulusHero(item.spec, gallery, dataURL, opts.placeholders), opts, opts.track);
+              // ONE photo up top (the ad's own visual), more revealed on scroll
+              html = cumulusPageHTML(m, cumulusHero(item.spec, gallery, dataURL, opts.placeholders), opts, opts.track,
+                gallery.map(function (gd) { return gd.dataURL; }));
               jsx = null;
             } else {
               html = pageHTML(m, dataURL, gallery.map(function (gd) { return gd.dataURL; }), design, opts.track);

@@ -1711,18 +1711,22 @@ var server = http.createServer(function (req, res) {
   }
 
   // --- AI landing content (writes each page AS the brand, first person) ---
-  // One call returns full page content per distinct hook: subhead, intro,
-  // 2-4 named sections, and a CTA — all in the brand's own voice, original
-  // (not copy-pasted from the source), no third-person / meta-commentary.
+  // Page anatomy the client assembles: a PER-AD opening (subhead + a short
+  // story that continues that ad's exact promise) followed by a SHARED
+  // long-form "about us" body (5-7 multi-paragraph sections + optional bullet
+  // points + a closing urge) that is identical on every page for consistency.
+  // One call returns openings for up to 10 pages; pass about:true on the first
+  // call of a run to also get the shared body. All first-person, original.
   if (pathname === '/api/ai/landing' && req.method === 'POST') {
     if (!effectiveKey()) return sendJSON(res, 501, { error: 'no_key', message: 'Turn on AI (top-right toggle) and add a key, or set ANTHROPIC_API_KEY.' });
     return readBody(req, function (raw) {
       var input; try { input = raw ? JSON.parse(raw) : {}; } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
-      var pagesIn = Array.isArray(input.pages) ? input.pages.slice(0, 20) : [];
+      var pagesIn = Array.isArray(input.pages) ? input.pages.slice(0, 10) : [];
       if (!pagesIn.length) return sendJSON(res, 400, { error: 'no_pages' });
+      var wantAbout = !!input.about;
       var brand = String(input.brand || 'the brand').slice(0, 80);
       var voice = String(input.voice || '').slice(0, 400);
-      var context = String(input.context || '').slice(0, 6000);
+      var context = String(input.context || '').slice(0, 24000);
       var system =
         'You are the senior in-house copywriter for ' + brand + '. You are writing ' + brand + '’s OWN landing pages. ' +
         'You ARE the brand, speaking directly to a person who just clicked one of our ads.\n\n' +
@@ -1731,19 +1735,32 @@ var server = http.createServer(function (req, res) {
         '• FORBIDDEN phrasings: "' + brand + ' is…", "the product", "the platform", "the service", "the company", "it offers", "is described as", "designed to". ' +
         'NEVER mention beta, prototype, MVP, concept, demo, waitlist, roadmap, "in development", or anything implying it is unfinished or that you are summarizing a document.\n' +
         '• Do NOT copy or lightly reword sentences from the source material. Read it, understand what we do and why it matters to a real person, then write ORIGINAL copy in our voice.\n' +
-        '• Infer and match our tone from the source (e.g. reverent, warm, playful, technical). Be emotionally resonant, concrete and human. No corporate filler, no clichés ("in today’s fast-paced world", "game-changing", "seamless", "unlock", "elevate").\n' +
-        '• Each page CONTINUES the exact promise its ad made (its headline + hook) — no bait-and-switch — then makes the reader want to come to us.\n\n' +
-        'For EACH page produce: subhead (one sentence continuing the hook, sharpening the promise); intro (2–3 sentences — the emotional "why us"); ' +
-        'sections (2–4 objects {kicker, title, body}: kicker = a 1–3 word label in our voice; title = a first-person headline written as us, NOT a generic label like "What this is"; ' +
-        'body = 2–4 sentences of persuasive first-person copy); cta (2–4 words for the final button). Vary sections across what we are / how it works / why it matters / who it’s for — always AS us.\n\n' +
-        'Output ONLY valid JSON, no prose or backticks.';
+        '• Infer and match our tone from the source (e.g. reverent, warm, playful, technical). Be emotionally resonant, concrete and human. No corporate filler, no clichés ("in today’s fast-paced world", "game-changing", "seamless", "unlock", "elevate").\n\n' +
+        'A page has two halves:\n' +
+        '1) A unique OPENING that continues the exact promise of the ad the reader clicked — no bait-and-switch.\n' +
+        '2) A shared ABOUT body: the full story of who we are, written once, that every page carries.\n' +
+        'Everything should leave the reader intrigued — the page informs generously, but the itch it creates is only scratched on our website. Pull them there.\n\n' +
+        'FOR EACH PAGE produce:\n' +
+        '• subhead — one sentence continuing that ad’s hook, sharpening its promise.\n' +
+        '• story — two short paragraphs separated by a blank line. The first paragraph is a vivid human moment or line that belongs to THIS ad’s promise — a scene, a memory, a truth the reader instantly recognizes (not "imagine…" clichés; write like a person, not an ad). The second paragraph turns and lands: this is exactly why we exist, and what the reader will find with us — bridging naturally into the shared body that follows.\n' +
+        (wantAbout
+          ? '\nPLUS produce ONE shared "about" body (identical for every page — write it once):\n' +
+            '• about.sections — 5 to 7 objects {kicker, title, body, points?}. kicker = 1–3 word label in our voice. ' +
+            'title = a first-person headline written as us, NOT a generic label like "What this is". ' +
+            'body = 2–3 substantial paragraphs separated by a blank line, 90–170 words per section, each paragraph doing real informational work: ' +
+            'concrete specifics from the source (what you actually see and do with us, real capabilities by name, real facts and numbers when the source has them — NEVER invented ones). ' +
+            'points = OPTIONAL, on the 1–3 sections where a scannable list genuinely helps (capabilities, how-it-works steps): 3–6 short first-person bullets, each a concrete fact or ability, no filler.\n' +
+            'Across the sections cover: what we are and what it feels like → how it actually works (real steps and detail) → what you can do with us (capabilities in human terms) → who it’s for and the moments it serves → the honest answer to the reader’s doubt → why this matters now. A reader who scrolls to the end should genuinely UNDERSTAND us — depth from the source material, never padding.\n' +
+            '• about.closer — {title, line, cta}: the final push. title = a first-person invitation that makes visiting our site feel inevitable; line = 1–2 sentences of honest urgency (what waiting costs, what’s waiting for them with us — never fake scarcity); cta = 2–4 words for the button.\n'
+          : '') +
+        '\nOutput ONLY valid JSON, no prose or backticks.';
       var user =
         'Everything we know about ourselves (source material — understand it, do not quote it):\n"""\n' + context + '\n"""\n' +
         (voice ? '\nOur brand voice: ' + voice + '\n' : '') +
-        '\nWrite one landing page for each of these ads. Each page must open from its headline + hook:\n' +
+        '\nWrite the opening for each of these ads:\n' +
         pagesIn.map(function (p, i) { return (i + 1) + '. HEADLINE: ' + String(p.headline || '').slice(0, 120) + (p.hook ? '\n   HOOK: ' + String(p.hook).slice(0, 260) : ''); }).join('\n') +
-        '\n\nReturn ONLY {"pages":[{"subhead":"","intro":"","sections":[{"kicker":"","title":"","body":""}],"cta":""}]} with exactly ' + pagesIn.length + ' entries, in order.';
-      callAnthropic({ model: MODEL, max_tokens: 8192, system: system, messages: [{ role: 'user', content: user }] }, function (err, status, body) {
+        '\n\nReturn ONLY {"pages":[{"subhead":"","story":""}' + (wantAbout ? ',…],"about":{"sections":[{"kicker":"","title":"","body":"","points":[]}],"closer":{"title":"","line":"","cta":""}}' : ']') + '} with exactly ' + pagesIn.length + ' page entries, in order.';
+      callAnthropic({ model: MODEL, max_tokens: 16384, system: system, messages: [{ role: 'user', content: user }] }, function (err, status, body) {
         if (err) return sendJSON(res, 502, { error: 'upstream', message: String(err.message || err) });
         if (status < 200 || status >= 300) {
           var msg = body; try { msg = JSON.parse(body).error.message; } catch (e) {}
@@ -1751,24 +1768,41 @@ var server = http.createServer(function (req, res) {
         }
         try {
           var json = JSON.parse(body), text = '';
+          if (json.stop_reason === 'max_tokens') return sendJSON(res, 500, { error: 'truncated', message: 'The landing copy ran past the output limit — ask for fewer pages per call.' });
           (json.content || []).forEach(function (b) { if (b.type === 'text') text += b.text; });
           text = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
           var a = text.indexOf('{'), z = text.lastIndexOf('}');
           if (a >= 0 && z > a) text = text.slice(a, z + 1);
           var d = JSON.parse(text);
+          function cleanSections(arr) {
+            return Array.isArray(arr) ? arr.slice(0, 8).map(function (s) {
+              s = s || {};
+              return {
+                kicker: String(s.kicker || '').slice(0, 40),
+                title: String(s.title || '').slice(0, 120),
+                body: String(s.body || '').slice(0, 2600),
+                points: Array.isArray(s.points) ? s.points.slice(0, 6).map(function (x) { return String(x || '').slice(0, 200); }).filter(Boolean) : []
+              };
+            }) : [];
+          }
           var pages = Array.isArray(d.pages) ? d.pages.map(function (p) {
             p = p || {};
-            return {
-              subhead: String(p.subhead || ''),
-              intro: String(p.intro || ''),
-              sections: Array.isArray(p.sections) ? p.sections.slice(0, 4).map(function (s) {
-                s = s || {};
-                return { kicker: String(s.kicker || '').slice(0, 40), title: String(s.title || '').slice(0, 120), body: String(s.body || '').slice(0, 700) };
-              }) : [],
-              cta: String(p.cta || '').slice(0, 40)
-            };
+            return { subhead: String(p.subhead || '').slice(0, 300), story: String(p.story || '').slice(0, 2200) };
           }) : [];
-          return sendJSON(res, 200, { pages: pages, model: MODEL });
+          var about = null;
+          if (wantAbout && d.about && typeof d.about === 'object') {
+            var aboutSecs = cleanSections(d.about.sections);
+            // an about with no sections is useless — return null so the client
+            // KNOWS it must ask again on the next batch, instead of shipping thin pages
+            if (aboutSecs.length) {
+              var cl = d.about.closer || {};
+              about = {
+                sections: aboutSecs,
+                closer: { title: String(cl.title || '').slice(0, 140), line: String(cl.line || '').slice(0, 400), cta: String(cl.cta || '').slice(0, 40) }
+              };
+            }
+          }
+          return sendJSON(res, 200, { pages: pages, about: about, model: MODEL });
         } catch (e2) { return sendJSON(res, 500, { error: 'parse', message: 'Could not parse the landing copy: ' + e2.message }); }
       });
     });

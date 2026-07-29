@@ -2462,11 +2462,28 @@ window.Ads = window.Ads || {};
       if (Array.isArray(s.benefits) && s.benefits.length) parts.push('What people gain: ' + s.benefits.join('; '));
       if (Array.isArray(s.features) && s.features.length) parts.push('What we offer: ' + s.features.join('; '));
       if (Array.isArray(s.proof) && s.proof.length) parts.push('Proof: ' + s.proof.join(' | '));
+      if (Array.isArray(s.objections) && s.objections.length) parts.push('Doubts people have (answer these honestly): ' + s.objections.join(' | '));
+      if (s.tone) parts.push('Our tone: ' + s.tone);
+      if (Array.isArray(s.keywords) && s.keywords.length) parts.push('Words that matter to us: ' + s.keywords.join(', '));
+    }
+    // market research: real pain points in the market's own words — the raw
+    // material for sections that answer what the reader is actually feeling.
+    // Honors the research panel's "use in ads" checkboxes, same as Generate.
+    var research = currentResearch();
+    if (research) {
+      if (research.summary) parts.push('What we know about the market: ' + String(research.summary).slice(0, 1500));
+      var chosen = researchSelection();
+      if (chosen.length) {
+        var pains = chosen.slice(0, 8).map(function (r) {
+          return '- ' + (r.pain || '') + (r.who ? ' (felt by: ' + r.who + ')' : '') + (r.quote ? ' — in their words: "' + r.quote + '"' : '');
+        }).join('\n');
+        parts.push('Real pain points people told us about:\n' + pains);
+      }
     }
     var siteText = gen.brief.site && gen.brief.site.text;
-    if (siteText) parts.push('In our own words on the site: ' + String(siteText).slice(0, 1800));
+    if (siteText) parts.push('In our own words on the site: ' + String(siteText).slice(0, 3500));
     var joined = parts.join('\n\n');
-    return joined ? joined.slice(0, 5800) : briefLib.compose(gen.brief).slice(0, 5800);
+    return joined ? joined.slice(0, 23000) : briefLib.compose(gen.brief).slice(0, 23000);
   }
   function openLandingModal() {
     var p = currentProject();
@@ -2544,35 +2561,76 @@ window.Ads = window.Ads || {};
               }).catch(function () {});
             })()
           : Promise.resolve();
-        // First-person copy is written per DISTINCT hook, in BATCHES of 8 so a
-        // large batch (e.g. 30 ads) can never blow past the model's output
-        // limit and truncate — that would drop the whole call to fallback copy.
-        // Each batch maps its own results back, so one failing batch only costs
-        // its own hooks their AI copy (they degrade to fallback), not all.
+        // Every page = a unique per-ad OPENING (subhead + story continuing that
+        // ad's promise) + ONE shared long-form "about us" body identical across
+        // pages. The first call writes the shared body (about:true); openings
+        // then stream in batches of 8, ≤3 in flight, so one failed batch only
+        // costs its own hooks their opening (they degrade to fallback).
         function norm(h) { return String(h).toLowerCase().replace(/\s+/g, ' '); }
         var ctx = landingContext(d), voice = store.getBrand().voice || '';
+        var sharedAbout = null;
         var contentStep = designStep.then(function () {
           if (!Ads._aiEnabled) return;
           var batches = [];
           for (var bi = 0; bi < hooks.length; bi += 8) batches.push(hooks.slice(bi, bi + 8));
           var doneB = 0;
           if (statusEl) statusEl.innerHTML = '<span class="spinner"></span> Writing your landing copy…';
-          return Promise.all(batches.map(function (ch) {
+          function runBatch(ch, wantAbout) {
             return ai.landingContent({
               pages: ch.map(function (g) { return { headline: g.headline, hook: g.hook }; }),
-              context: ctx, brand: brand, voice: voice
-            }).then(function (arr) {
-              ch.forEach(function (g, i) { if (arr && arr[i]) g.content = arr[i]; });
+              context: ctx, brand: brand, voice: voice, about: wantAbout
+            }).then(function (resp) {
+              // only adopt an about that actually carries sections — an empty
+              // one would silently disable the ask-again fallback below
+              if (resp && resp.about && Array.isArray(resp.about.sections) && resp.about.sections.length && !sharedAbout) sharedAbout = resp.about;
+              var arr = (resp && resp.pages) || [];
+              ch.forEach(function (g, i) { if (arr[i]) g.content = arr[i]; });
             }).catch(function () {}).then(function () {
               doneB++;
               if (statusEl && batches.length > 1) statusEl.innerHTML = '<span class="spinner"></span> Writing your landing copy… (' + doneB + '/' + batches.length + ')';
             });
-          }));
+          }
+          // the shared body must exist before anything renders, so batch 0 runs
+          // alone; the rest pump ≤3 at a time (openings are small responses)
+          return runBatch(batches[0], true).then(function () {
+            var rest = batches.slice(1);
+            if (!rest.length) return;
+            return new Promise(function (resolve) {
+              var next = 0, active = 0, CONC = 3, aboutPending = false;
+              function pump() {
+                if (next >= rest.length && active === 0) return resolve();
+                while (active < CONC && next < rest.length) {
+                  // if the shared body is still missing, exactly ONE in-flight
+                  // batch asks for it again — never several at once (cost)
+                  (function () {
+                    var ask = !sharedAbout && !aboutPending;
+                    if (ask) aboutPending = true;
+                    runBatch(rest[next++], ask).then(function () {
+                      if (ask) aboutPending = false;
+                      active--; pump();
+                    });
+                  })();
+                  active++;
+                }
+              }
+              pump();
+            });
+          });
         });
         contentStep.then(function () {
-          // map the per-hook copy back onto every ad that shares that hook
+          // stitch each ad's opening onto the shared about body
           var byHook = {};
-          hooks.forEach(function (g) { if (g.content) byHook[norm(g.headline)] = g.content; });
+          hooks.forEach(function (g) {
+            if (!g.content && !sharedAbout) return;
+            var o = g.content || {};
+            byHook[norm(g.headline)] = {
+              subhead: o.subhead || '',
+              intro: o.story || '',
+              sections: (sharedAbout && sharedAbout.sections) || [],
+              closer: (sharedAbout && sharedAbout.closer) || null,
+              cta: (sharedAbout && sharedAbout.closer && sharedAbout.closer.cta) || ''
+            };
+          });
           items.forEach(function (it) { it.content = byHook[norm(it.headline)] || null; });
           return Ads.landing.generate({
             items: items, projectId: pid,

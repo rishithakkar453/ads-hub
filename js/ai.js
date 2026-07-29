@@ -78,15 +78,17 @@ window.Ads = window.Ads || {};
     });
   }
 
-  // One call: full first-person landing copy per hook → [{subhead,intro,sections:[{kicker,title,body}],cta}]
+  // Landing copy: per-page openings ({subhead, story}) and — when opts.about
+  // is true — the shared long-form about body every page carries.
+  // Resolves { pages:[{subhead,story}], about:{sections:[...],closer:{...}}|null }.
   function landingContent(opts) {
     return fetch('/api/ai/landing', {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ads-Hub': '1' },
-      body: JSON.stringify({ pages: opts.pages, context: opts.context, brand: opts.brand || '', voice: opts.voice || '' })
+      body: JSON.stringify({ pages: opts.pages, context: opts.context, brand: opts.brand || '', voice: opts.voice || '', about: !!opts.about })
     }).then(function (r) {
       return r.json().then(function (body) {
         if (!r.ok) throw new Error(body && body.message ? body.message : ('Landing copy failed (' + r.status + ')'));
-        return body.pages || [];
+        return { pages: body.pages || [], about: body.about || null };
       });
     });
   }
