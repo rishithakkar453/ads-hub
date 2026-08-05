@@ -1364,10 +1364,15 @@ window.Ads = window.Ads || {};
         var videoIdx = 0; for (var j = 0; j < i; j++) if (kindFor(j) === 'video') videoIdx++;
         var ve = vids.length ? vids[videoIdx % vids.length] : null;
         var hasClips = ve && ve.clips && ve.clips.length;
-        // Mix: ~2 of every 3 video ads are real extracted CLIPS (each a
-        // different segment), the rest are composed motion-graphics — so the
-        // grid shows both footage and designed ads.
-        if (hasClips && videoIdx % 3 !== 2) {
+        var aiKeys = Object.keys(aiClips);
+        // Priority: when the user has ANIMATED AI images, HALF of all video ads
+        // ride those real Veo clips — picked directly (not left to the rotating
+        // image cursor), or an uploaded video's clips would crowd them out.
+        // The other half mixes uploaded clips + designed motion as before.
+        if (aiKeys.length && videoIdx % 2 === 0) {
+          var ak = aiKeys[aiClipToggle++ % aiKeys.length];
+          bgVideo = aiClips[ak]; videoPoster = ak; img = ak; motion = 'footage';
+        } else if (hasClips && videoIdx % 3 !== 2) {
           var cl = ve.clips[clipCursor++ % ve.clips.length];
           bgVideo = ve.url; clip = { start: cl.start, end: cl.end };
           // still fallback chain: clip poster → video poster → an extracted
@@ -1375,10 +1380,6 @@ window.Ads = window.Ads || {};
           videoPoster = cl.poster || ve.poster || framesOf(ve)[0] || null; motion = 'footage';
         } else if (ve && !hasClips) {              // analysis failed → whole video as background
           bgVideo = ve.url; videoPoster = ve.poster || framesOf(ve)[0] || null; motion = 'footage';
-        } else if (img && aiClips[img] && (aiClipToggle++ % 2 === 0)) {
-          // an ANIMATED AI image → real Veo footage looping under the copy;
-          // alternating keeps half of these as designed motion for variety
-          bgVideo = aiClips[img]; videoPoster = img; motion = 'footage';
         } else if (img) {                          // composed: a site image, animated
           motion = (videoIdx % 2) ? 'reveal' : 'showcase';
         } else {                                   // composed: kinetic gradient-mesh
