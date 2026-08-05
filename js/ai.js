@@ -200,6 +200,20 @@ window.Ads = window.Ads || {};
       return pump();
     });
   }
+  // Animate an AI image into real footage via Veo — long call (30s–5min).
+  // Resolves { url } — a durable /pfiles project URL for the mp4.
+  function genClip(opts) {
+    return fetch('/api/ai/genclip', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ads-Hub': '1' },
+      body: JSON.stringify({ project: opts.project, prompt: opts.prompt || '', image: opts.image })
+    }).then(function (r) {
+      return r.json().then(function (body) {
+        if (r.status === 501) { var e = new Error(body && body.message || 'No Gemini key'); e.noKey = true; throw e; }
+        if (!r.ok) throw new Error(body && body.message ? body.message : ('Clip generation failed (' + r.status + ')'));
+        return body;
+      });
+    });
+  }
   function geminiStatus() {
     return fetch('/api/gemini/status').then(function (r) { return r.json(); }).catch(function () { return { enabled: false }; });
   }
@@ -213,5 +227,5 @@ window.Ads = window.Ads || {};
       .then(function (r) { return r.json(); }).catch(function () { return { enabled: true, ok: false, error: 'Could not reach the key checker' }; });
   }
 
-  Ads.ai = { status: status, setKey: setKey, generateCopy: generateCopy, generateDossier: generateDossier, research: research, landingContent: landingContent, imageConcepts: imageConcepts, genImage: genImage, genImages: genImages, geminiStatus: geminiStatus, setGeminiKey: setGeminiKey, geminiVerify: geminiVerify, variationToSpec: variationToSpec, scrape: scrape, editSpec: editSpec };
+  Ads.ai = { status: status, setKey: setKey, generateCopy: generateCopy, generateDossier: generateDossier, research: research, landingContent: landingContent, imageConcepts: imageConcepts, genImage: genImage, genImages: genImages, genClip: genClip, geminiStatus: geminiStatus, setGeminiKey: setGeminiKey, geminiVerify: geminiVerify, variationToSpec: variationToSpec, scrape: scrape, editSpec: editSpec };
 })();

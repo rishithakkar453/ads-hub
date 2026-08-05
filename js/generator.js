@@ -27,6 +27,7 @@ window.Ads = window.Ads || {};
     count: 12,
     imgCount: 6,              // how many relevant images to generate at a time
     genImgBusy: false,        // an image-concept generation is in flight
+    animBusy: {},             // genImage id → true while Veo is filming it
     gemStatus: null,          // cached Nano Banana (Gemini) on/off, so the panel can offer an inline key
     view: 'plain',            // default: just the ad + caption, no device chrome
     platform: 'facebook',
@@ -120,7 +121,7 @@ window.Ads = window.Ads || {};
     gen.results = [];
     gen.selected = {}; gen.liked = {}; gen.disliked = {}; gen.removed = {};
     gen.generating = false; gen.statusMsg = '';
-    gen.researching = false; gen.analyzing = false; gen.genImgBusy = false;   // a switch must not leave the old project's in-flight flags set (would block the new project's auto-research / image gen)
+    gen.researching = false; gen.analyzing = false; gen.genImgBusy = false; gen.animBusy = {};   // a switch must not leave the old project's in-flight flags set (would block the new project's auto-research / image gen)
     gen.runSeq++;                       // cancel any in-flight generate/upload work
     gen.copyEngine = p.copyEngine || ''; gen.copyInputs = p.copyInputs || [];
     rememberProject(p.id);
@@ -142,7 +143,7 @@ window.Ads = window.Ads || {};
     gen.brief = { url: '', site: null, text: '', files: [], images: [], videos: [] };
     gen.results = []; gen.selected = {}; gen.liked = {}; gen.disliked = {}; gen.removed = {};
     gen.generating = false; gen.statusMsg = ''; gen.copyEngine = ''; gen.copyInputs = [];
-    gen.researching = false; gen.analyzing = false; gen.genImgBusy = false;
+    gen.researching = false; gen.analyzing = false; gen.genImgBusy = false; gen.animBusy = {};
     Ads.go('generator');
   }
   function refreshProjectBar() {
@@ -765,11 +766,17 @@ window.Ads = window.Ads || {};
   function imagesPanel() {
     var kept = genImagesList();
     var busy = gen.genImgBusy && gen.genImgBusy === gen.projectId;
+    var real = kept.filter(function (g) { return !g.placeholder; });
+    var animatable = real.filter(function (g) { return !g.videoURL && !gen.animBusy[g.id]; });
     var gallery = kept.length
       ? '<div class="gi-grid">' + kept.map(function (g, i) {
           return '<div class="gi-item" title="' + esc(g.prompt || g.label || '') + '">' +
             '<img src="' + g.dataURL + '" alt="">' +
             '<button class="gi-del" data-gi-del="' + i + '" title="Discard this image">✕</button>' +
+            (!g.placeholder && !g.videoURL && !gen.animBusy[g.id]
+              ? '<button class="gi-anim" data-gi-anim="' + i + '" title="Animate into a real video clip with Veo (~$1–2, billed by Google, takes 1–3 min)">🎬</button>' : '') +
+            (gen.animBusy[g.id] ? '<div class="gi-animating"><span class="spinner"></span> filming…</div>' : '') +
+            (g.videoURL ? '<div class="gi-clipbadge">🎬 CLIP</div>' : '') +
             (g.label ? '<div class="gi-label">' + esc(g.label) + '</div>' : '') +
           '</div>';
         }).join('') + '</div>'
@@ -778,6 +785,7 @@ window.Ads = window.Ads || {};
       '<div class="gi-bar">' +
         '<label class="gi-count">How many <input type="range" id="gi-range" min="1" max="25" step="1" value="' + gen.imgCount + '"><b id="gi-num">' + gen.imgCount + '</b></label>' +
         '<div class="toolbar-spacer"></div>' +
+        (animatable.length ? '<button class="btn is-ghost is-sm" id="gi-animhalf" title="Turn half of your kept images into real 8-second video clips (Veo, ~$1–2 each, billed by Google)">🎬 Animate half</button>' : '') +
         '<button class="btn is-sm" id="gi-go"' + (busy ? ' disabled' : '') + '><span class="btn-ico">' + icons().sparkle + '</span> ' + (busy ? 'Generating…' : 'Generate images') + '</button>' +
       '</div>' +
       '<div class="gh-status" id="gi-status">' + (busy ? '<span class="spinner"></span> Art-directing image concepts from your project…' : '') + '</div>';
@@ -786,6 +794,7 @@ window.Ads = window.Ads || {};
         '<span class="u-label">' + (kept.length ? kept.length + ' kept · fed into every Generate' : 'AI ad visuals → kept ones feed Generate') + '</span></div>' +
       controls + giKeyRow() + gallery +
       (kept.length ? '<div class="hint" style="margin-top:1rem"><strong>Double-click</strong> any image to see it full-size. Kept images become input visuals — press <strong>Generate ads</strong> and some ads are built on these.' +
+        (kept.some(function (g) { return g.videoURL; }) ? ' Images marked <strong>🎬 CLIP</strong> play as real footage in about half of the video ads built on them.' : '') +
         (kept.some(function (g) { return g.placeholder; }) ? ' Some are placeholder swatches (add a Gemini key above for real photos).' : '') + '</div>' : '') +
     '</section>';
   }
@@ -883,10 +892,32 @@ window.Ads = window.Ads || {};
         refreshImagesPanel();
       });
     });
+    // 🎬 animate ONE image into real footage
+    el.querySelectorAll('[data-gi-anim]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var g = genImagesList()[+b.getAttribute('data-gi-anim')];
+        if (g) animateImages([g.id]);
+      });
+    });
+    // 🎬 bulk: bring the project to "half the kept images have real clips"
+    var animHalf = el.querySelector('#gi-animhalf');
+    if (animHalf) animHalf.addEventListener('click', function () {
+      var real = genImagesList().filter(function (g) { return !g.placeholder; });
+      var animated = real.filter(function (g) { return g.videoURL; }).length;
+      var want = Math.max(0, Math.ceil(real.length / 2) - animated);
+      var targets = real.filter(function (g) { return !g.videoURL && !gen.animBusy[g.id]; }).slice(0, want);
+      if (!targets.length) { Ads.toast('Half of your images already have clips'); return; }
+      Ads.confirm({
+        title: 'Animate ' + targets.length + ' image' + (targets.length > 1 ? 's' : '') + ' into real clips?',
+        message: 'Veo films each one into an 8-second vertical clip that plays as real footage in your video ads. Roughly $1–2 per clip, billed by Google to your Gemini key. Takes a few minutes — you can keep working.',
+        okLabel: 'Animate',
+        onConfirm: function () { animateImages(targets.map(function (g) { return g.id; })); }
+      });
+    });
     // double-click a kept image → open it full-size
     el.querySelectorAll('.gi-item').forEach(function (it) {
       it.addEventListener('dblclick', function (e) {
-        if (e.target.closest && e.target.closest('.gi-del')) return;   // not when double-clicking delete
+        if (e.target.closest && e.target.closest('.gi-del,.gi-anim')) return;   // not when double-clicking a control
         var img = it.querySelector('img'); if (!img || !Ads.lightbox) return;
         Ads.lightbox(img.getAttribute('src'), it.getAttribute('title') || '');
       });
@@ -898,6 +929,50 @@ window.Ads = window.Ads || {};
     var tmp = document.createElement('div'); tmp.innerHTML = imagesPanel();
     elp.replaceWith(tmp.firstChild);
     bindImages(viewEl);
+  }
+  // Veo-animate kept AI images into real footage, ≤2 filming at once. Success
+  // pins a durable /pfiles clip URL onto the project's genImage entry; video
+  // ads built on that image then alternate between live footage and designed
+  // motion. Failures toast per-image and never block the others.
+  function animateImages(ids) {
+    var p = ensureProject(), pid = p.id;
+    var byId = {};
+    genImagesList().forEach(function (g) { byId[g.id] = g; });
+    var targets = ids.map(function (id) { return byId[id]; })
+      .filter(function (g) { return g && !g.placeholder && !g.videoURL && !gen.animBusy[g.id]; });
+    if (!targets.length) return;
+    targets.forEach(function (g) { gen.animBusy[g.id] = true; });
+    refreshImagesPanel();
+    Ads.toast('Filming ' + targets.length + ' clip' + (targets.length > 1 ? 's' : '') + ' with Veo — 1–3 min each, billed by Google');
+    var queue = targets.slice(), active = 0, CONC = 2, doneN = 0, fails = 0;
+    function pump() {
+      if (!queue.length && !active) {
+        if (gen.projectId === pid) refreshImagesPanel();
+        if (doneN) Ads.toast(doneN + ' clip' + (doneN > 1 ? 's' : '') + ' ready — video ads built on these images now use real footage' + (fails ? ' (' + fails + ' failed)' : ''), false);
+        return;
+      }
+      while (active < CONC && queue.length) {
+        (function (g) {
+          active++;
+          ai.genClip({ project: pid, prompt: g.prompt || g.label || '', image: g.dataURL }).then(function (resp) {
+            var proj = store.getProject(pid);
+            if (proj && resp && resp.url) {
+              var next = (proj.genImages || []).map(function (x) { return x.id === g.id ? Object.assign({}, x, { videoURL: resp.url }) : x; });
+              store.updateProject(pid, { genImages: next });
+              doneN++;
+            }
+          }).catch(function (e) {
+            fails++;
+            Ads.toast('Could not animate “' + (g.label || 'image') + '”: ' + (e && e.message || 'failed'), true);
+          }).then(function () {
+            delete gen.animBusy[g.id]; active--;
+            if (gen.projectId === pid) refreshImagesPanel();
+            pump();
+          });
+        })(queue.shift());
+      }
+    }
+    pump();
   }
   // selected pain points → copy variations for the no-AI fallback path
   function researchFallbackCopies(list) {
@@ -1206,7 +1281,7 @@ window.Ads = window.Ads || {};
   }
   // where an ad's visual comes from → 'video' | 'website' | 'image' | 'aiimage' | 'gradient'
   function visualSourceOf(product, isFootage) {
-    if (isFootage) return 'video';
+    if (isFootage) return (product && genImageURLs().indexOf(product) >= 0) ? 'aiclip' : 'video';
     if (!product) return 'gradient';
     var b = gen.brief, site = b.site || {};
     if (genImageURLs().indexOf(product) >= 0) return 'aiimage';
@@ -1243,6 +1318,11 @@ window.Ads = window.Ads || {};
     var seen = {};
     var videoSeen = {};    // de-dup video DNA across the batch
     var clipCursor = 0;    // cycles through the analyzed clips so each clip ad differs
+    // AI images the user ANIMATED (Veo) → their real footage URLs. Half of the
+    // qualifying video ads use the live clip, half stay designed motion.
+    var aiClips = {};
+    genImagesList().forEach(function (g) { if (g.videoURL && g.dataURL && !g.placeholder) aiClips[g.dataURL] = g.videoURL; });
+    var aiClipToggle = 0;
     var specs = [];
     // bias creative choices toward liked / away from disliked attribute values
     var scores = prefScores();
@@ -1295,6 +1375,10 @@ window.Ads = window.Ads || {};
           videoPoster = cl.poster || ve.poster || framesOf(ve)[0] || null; motion = 'footage';
         } else if (ve && !hasClips) {              // analysis failed → whole video as background
           bgVideo = ve.url; videoPoster = ve.poster || framesOf(ve)[0] || null; motion = 'footage';
+        } else if (img && aiClips[img] && (aiClipToggle++ % 2 === 0)) {
+          // an ANIMATED AI image → real Veo footage looping under the copy;
+          // alternating keeps half of these as designed motion for variety
+          bgVideo = aiClips[img]; videoPoster = img; motion = 'footage';
         } else if (img) {                          // composed: a site image, animated
           motion = (videoIdx % 2) ? 'reveal' : 'showcase';
         } else {                                   // composed: kinetic gradient-mesh
@@ -1733,7 +1817,7 @@ window.Ads = window.Ads || {};
   /* ===================== view: results grid =============================== */
   function selectedIdx() { return Object.keys(gen.selected).filter(function (k) { return gen.selected[k] && !gen.removed[k]; }).map(Number); }
 
-  var SRC_LABEL = { video: '🎬 from video', website: '🌐 from website', image: '🖼 your image', aiimage: '✨ AI image', gradient: '◆ generated' };
+  var SRC_LABEL = { video: '🎬 from video', website: '🌐 from website', image: '🖼 your image', aiimage: '✨ AI image', aiclip: '🎬 AI clip', gradient: '◆ generated' };
   function srcChip(s) {
     var v = s.visualSource; if (!v) return '';
     return '<span class="vc-src is-' + v + '" title="Where this ad’s visual came from">' + SRC_LABEL[v] + '</span>';

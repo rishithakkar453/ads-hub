@@ -218,6 +218,11 @@ input[type="range"]::-moz-range-thumb {
 .gi-del { position: absolute; top: 0.5rem; right: 0.5rem; width: 2.2rem; height: 2.2rem; border-radius: 50%; border: none; cursor: pointer; background: rgba(0,0,0,0.6); color: #fff; font-size: 1.3rem; line-height: 1; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 120ms ease; }
 .gi-item:hover .gi-del { opacity: 1; }
 .gi-del:hover { background: var(--danger, #e5484d); }
+.gi-anim { position: absolute; top: 0.5rem; left: 0.5rem; height: 2.4rem; padding: 0 0.9rem; border-radius: 99rem; border: none; cursor: pointer; background: rgba(0,0,0,0.65); color: #fff; font-size: 1.25rem; display: flex; align-items: center; opacity: 0; transition: opacity 120ms ease, background 120ms ease; }
+.gi-item:hover .gi-anim { opacity: 1; }
+.gi-anim:hover { background: var(--accent, #ff7a3c); }
+.gi-animating { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 0.7rem; background: rgba(0,0,0,0.55); color: #fff; font-size: 1.15rem; letter-spacing: 0.06em; text-transform: uppercase; }
+.gi-clipbadge { position: absolute; top: 0.5rem; left: 0.5rem; padding: 0.25rem 0.8rem; border-radius: 99rem; background: var(--accent, #ff7a3c); color: #16130e; font-size: 1rem; font-weight: 700; letter-spacing: 0.06em; }
 .gi-label { position: absolute; left: 0; right: 0; bottom: 0; padding: 0.5rem 0.7rem; font-size: 1.05rem; color: #fff; background: linear-gradient(0deg, rgba(0,0,0,0.72), rgba(0,0,0,0)); }
 .fp-item .gi-cap { position: absolute; left: 0; right: 0; bottom: 0; padding: 0.4rem 0.6rem; font-size: 1rem; color: #fff; background: linear-gradient(0deg, rgba(0,0,0,0.72), rgba(0,0,0,0)); }
 

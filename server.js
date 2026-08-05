@@ -759,6 +759,91 @@ function geminiGenerate(prompt, refs, cb) {
   greq.write(payload); greq.end();
 }
 
+/* ---- Veo (Gemini API) image-to-video --------------------------------------
+   Animates one of the tool's AI-generated stills into REAL footage: start a
+   predictLongRunning job (prompt + inline image), poll the operation until
+   done, download the mp4. Same key as Nano Banana. ~8s vertical clip. */
+var VEO_MODEL = process.env.ADS_VEO_MODEL || 'veo-3.1-fast-generate-preview';
+function veoRequest(method, apiPath, payload, cb) {
+  var data = payload ? JSON.stringify(payload) : null;
+  var r = https.request({
+    hostname: 'generativelanguage.googleapis.com', path: apiPath, method: method,
+    headers: Object.assign({ 'x-goog-api-key': effectiveGeminiKey() },
+      data ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } : {})
+  }, function (resp) {
+    var body = '';
+    resp.on('data', function (c) { body += c; });
+    resp.on('end', function () {
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        var msg = body; try { msg = JSON.parse(body).error.message; } catch (e) {}
+        return cb(new Error('Veo ' + resp.statusCode + ': ' + String(msg).slice(0, 300)));
+      }
+      var j; try { j = JSON.parse(body); } catch (e) { return cb(new Error('Bad Veo response')); }
+      cb(null, j);
+    });
+  });
+  r.on('error', cb);
+  r.setTimeout(60000, function () { r.destroy(new Error('Veo request timed out')); });
+  if (data) r.write(data);
+  r.end();
+}
+function veoDownload(uri, cb, hops) {
+  hops = hops || 0;
+  if (hops > 4) return cb(new Error('Too many redirects downloading the clip'));
+  var r = https.get(uri, { headers: { 'x-goog-api-key': effectiveGeminiKey() } }, function (resp) {
+    if (resp.statusCode >= 300 && resp.statusCode < 400 && resp.headers.location) {
+      resp.resume(); return veoDownload(resp.headers.location, cb, hops + 1);
+    }
+    if (resp.statusCode < 200 || resp.statusCode >= 300) { resp.resume(); return cb(new Error('Clip download failed (' + resp.statusCode + ')')); }
+    var chunks = [], size = 0;
+    resp.on('data', function (c) { size += c.length; if (size > 200 * 1024 * 1024) { r.destroy(); return; } chunks.push(c); });
+    resp.on('end', function () { cb(null, Buffer.concat(chunks)); });
+  });
+  r.on('error', cb);
+  r.setTimeout(180000, function () { r.destroy(new Error('Clip download timed out')); });
+}
+function veoGenerate(prompt, imageDataURL, cb) {
+  if (!effectiveGeminiKey()) return cb(new Error('no_gemini_key'));
+  var m = /^data:(image\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/i.exec(String(imageDataURL || ''));
+  if (!m) return cb(new Error('The image must be an inline data URL'));
+  function start(imageField, isRetry) {
+    veoRequest('POST', '/v1beta/models/' + encodeURIComponent(VEO_MODEL) + ':predictLongRunning', {
+      instances: [{ prompt: prompt, image: imageField }],
+      parameters: { aspectRatio: '9:16', resolution: '720p' }
+    }, function (err, j) {
+      if (err) {
+        // some API versions want the older image encoding — try both once
+        if (!isRetry && /400/.test(err.message) && /image|inline|unknown|invalid/i.test(err.message)) {
+          return start({ bytesBase64Encoded: m[2], mimeType: m[1] }, true);
+        }
+        return cb(err);
+      }
+      if (!j.name) return cb(new Error('Veo did not return an operation id'));
+      var waited = 0;
+      (function poll() {
+        setTimeout(function () {
+          waited += 8;
+          veoRequest('GET', '/v1beta/' + j.name, null, function (perr, op) {
+            if (perr) return cb(perr);
+            if (!op.done) {
+              if (waited > 420) return cb(new Error('Veo is taking too long — try again in a few minutes'));
+              return poll();
+            }
+            if (op.error) return cb(new Error('Veo: ' + String(op.error.message || 'generation failed').slice(0, 300)));
+            var r2 = op.response || {};
+            var sample = (((r2.generateVideoResponse || {}).generatedSamples) || [])[0] ||
+                         ((r2.generatedVideos || [])[0]) || ((r2.videos || [])[0]) || null;
+            var uri = sample && ((sample.video && (sample.video.uri || sample.video.url)) || sample.uri || sample.url);
+            if (!uri) return cb(new Error('Veo finished but returned no video (the image may have been blocked)'));
+            veoDownload(uri, cb);
+          });
+        }, 8000);
+      })();
+    });
+  }
+  start({ inlineData: { mimeType: m[1], data: m[2] } }, false);
+}
+
 // Cheap, free key check: ListModels uses the same key + auth path as image
 // generation, so a 403/blocked here means the key can't reach the Gemini API at
 // all (usually API restrictions on the key). Remembers the reason in
@@ -1633,6 +1718,38 @@ var server = http.createServer(function (req, res) {
         go();
       });
     }, 2 * 1024 * 1024);
+  }
+
+  // --- Animate an AI image into REAL footage (Veo) — saved as a project file
+  // so the clip is durable (/pfiles URL) and survives reloads + saves.
+  if (pathname === '/api/ai/genclip' && req.method === 'POST') {
+    if (!requireAppHeader(req, res)) return;
+    if (!effectiveGeminiKey()) return sendJSON(res, 501, { error: 'no_gemini_key', message: 'Add your Gemini API key to animate images.' });
+    return readBody(req, function (raw, overSize) {
+      if (raw == null) return sendJSON(res, 413, { error: 'too_large', message: 'Image too large (' + Math.round(overSize / 1e6) + 'MB)' });
+      var input; try { input = raw ? JSON.parse(raw) : {}; } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
+      var pid = safeSeg(input.project);
+      if (!pid || pid === '_') return sendJSON(res, 400, { error: 'bad_project' });
+      var prompt = String(input.prompt || '').slice(0, 1600);
+      var full = 'Bring this exact scene to life as a short cinematic advertising clip. ' +
+        (prompt ? 'The scene: ' + prompt + ' ' : '') +
+        'Natural, believable motion true to the scene — subtle camera drift, living light, real-world movement. ' +
+        'Keep the composition, subjects and mood of the source image. No text, captions, logos or watermarks.';
+      veoGenerate(full, input.image, function (err, buf) {
+        if (err) {
+          if (/\b(401|403)\b|blocked|API key|PERMISSION|not valid/i.test(err.message)) geminiLastError = err.message;
+          return sendJSON(res, 502, { error: 'veo', message: err.message });
+        }
+        var name = Date.now().toString(36) + Math.random().toString(36).slice(2, 6) + '-aiclip.mp4';
+        var dir = path.join(PROJECTS_DIR, pid, 'files');
+        fs.mkdir(dir, { recursive: true }, function () {
+          fs.writeFile(path.join(dir, name), buf, function (werr) {
+            if (werr) return sendJSON(res, 500, { error: 'write', message: String(werr.message) });
+            sendJSON(res, 200, { url: '/pfiles/' + pid + '/' + name, bytes: buf.length, model: VEO_MODEL });
+          });
+        });
+      });
+    }, 20 * 1024 * 1024);
   }
 
   // --- AI copy generation ---
