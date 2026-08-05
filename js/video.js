@@ -479,6 +479,7 @@ window.Ads = window.Ads || {};
       function enforce() { if (v.currentTime >= ce - 0.03 || v.currentTime < cs - 0.06) { try { v.currentTime = cs; } catch (e) {} } }
       function ok() {
         if (settled) return; settled = true;
+        v._wantPlay = true;   // draw loops re-kick play() while this is set
         if (useClip && isFinite(v.duration) && v.duration > 0) {
           // stale analysis of a replaced upload: clamp the window to the file
           // that actually exists now. A start at/past the end (or a window
@@ -522,7 +523,16 @@ window.Ads = window.Ads || {};
   // <video> keeps decoding for the life of the session otherwise)
   function releaseVideo(v) {
     if (!v) return;
+    v._wantPlay = false;
     try { v.pause(); v.removeAttribute('src'); v.load(); } catch (e) {}
+  }
+  // Chrome pauses muted "video-only" media to save power (background/occluded
+  // tabs), and play() can be interrupted mid-flight — either way the footage
+  // freezes on one frame while the ad keeps animating. Every draw tick calls
+  // this: if the clip SHOULD be running but got paused, kick it awake again.
+  function kickPlay(v) {
+    if (!v || !v._wantPlay || !v.paused) return;
+    try { var p = v.play(); if (p && p.catch) p.catch(function () {}); } catch (e) {}
   }
 
   /* ---- preview: poster + live loop --------------------------------------- */
@@ -548,7 +558,7 @@ window.Ads = window.Ads || {};
         // or the branded mesh gradient — never the live video, which draws blank
         // here and would wipe the fallback. Live motion is hover / export only.
         drawFrame(ctx, spec, DURATION * 0.62, d.w, d.h, assets, DURATION, null, true);
-        if (assets.video) { try { assets.video.pause(); } catch (e) {} }
+        if (assets.video) { assets.video._wantPlay = false; try { assets.video.pause(); } catch (e) {} }
         return;
       }
       // immediate non-blank frame (footage still / site image) before the live
@@ -559,12 +569,13 @@ window.Ads = window.Ads || {};
         if (ctrl.stopped) return;
         if (start == null) start = ts;
         var t = ((ts - start) / 1000) % DURATION;
+        kickPlay(assets.video);   // self-heal: power-saving / interrupted play()
         drawFrame(ctx, spec, t, d.w, d.h, assets, DURATION);
         ctrl.raf = requestAnimationFrame(step);
       }
       ctrl.raf = requestAnimationFrame(step);
     });
-    function pauseVid() { if (ctrl.assets && ctrl.assets.video) { try { ctrl.assets.video.pause(); } catch (e) {} } }
+    function pauseVid() { if (ctrl.assets && ctrl.assets.video) { ctrl.assets.video._wantPlay = false; try { ctrl.assets.video.pause(); } catch (e) {} } }
     ctrl.stop = function () { ctrl.stopped = true; if (ctrl.raf) cancelAnimationFrame(ctrl.raf); pauseVid(); };
     ctrl.poster = function () {
       ctrl.stopped = true; if (ctrl.raf) cancelAnimationFrame(ctrl.raf); pauseVid();
@@ -613,6 +624,7 @@ window.Ads = window.Ads || {};
         rec.start();
         var frames = Math.round(DURATION * FPS), i = 0;
         var timer = setInterval(function () {
+          kickPlay(assets.video);   // an export must never record a frozen clip
           drawFrame(ctx, spec, i / FPS, d.w, d.h, assets, DURATION);
           if (manual && track) { try { track.requestFrame(); } catch (e) {} }
           i++;

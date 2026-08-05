@@ -227,18 +227,44 @@ function callAnthropic(payload, cb, timeoutMs) {
       'content-length': Buffer.byteLength(data)
     }
   };
-  var r = https.request(options, function (resp) {
-    var body = '';
-    resp.on('data', function (c) { body += c; });
-    resp.on('end', function () { cb(null, resp.statusCode, body); });
-  });
-  // a stalled upstream must surface as an error, not hang the client forever.
-  // Non-streaming calls send nothing until done, so this is a per-call deadline;
-  // web-search research turns run long and pass a bigger budget.
-  r.setTimeout(timeoutMs || 180000, function () { r.destroy(new Error('Anthropic API timed out')); });
-  r.on('error', function (e) { cb(e); });
-  r.write(data);
-  r.end();
+  // Transient API failures (529 overloaded, 429 rate-limit, 5xx blips, dropped
+  // sockets) retry automatically with backoff — the user should never see
+  // "Overloaded" for a condition that clears in seconds. Deadline timeouts do
+  // NOT retry: they'd double an already-long wait.
+  var attempt = 0, MAX_ATTEMPTS = 4, BACKOFF = [2000, 5000, 11000];
+  function retryable(status) { return status === 529 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504; }
+  function once() {
+    attempt++;
+    var r = https.request(options, function (resp) {
+      var body = '';
+      resp.on('data', function (c) { body += c; });
+      resp.on('end', function () {
+        if (retryable(resp.statusCode) && attempt < MAX_ATTEMPTS) {
+          var wait = BACKOFF[attempt - 1] || 11000;
+          var ra = parseInt(resp.headers['retry-after'], 10);
+          if (resp.statusCode === 429 && ra > 0 && ra <= 60) wait = ra * 1000;
+          console.log('[ads-hub] Anthropic ' + resp.statusCode + ' — retrying in ' + Math.round(wait / 1000) + 's (attempt ' + attempt + '/' + (MAX_ATTEMPTS - 1) + ')');
+          return setTimeout(once, wait);
+        }
+        cb(null, resp.statusCode, body);
+      });
+    });
+    // a stalled upstream must surface as an error, not hang the client forever.
+    // Non-streaming calls send nothing until done, so this is a per-call deadline;
+    // web-search research turns run long and pass a bigger budget.
+    r.setTimeout(timeoutMs || 180000, function () { r.destroy(new Error('Anthropic API timed out')); });
+    r.on('error', function (e) {
+      if (attempt < MAX_ATTEMPTS && !/timed out/i.test(String(e.message))) {
+        var wait = BACKOFF[attempt - 1] || 11000;
+        console.log('[ads-hub] Anthropic connection error (' + e.message + ') — retrying in ' + Math.round(wait / 1000) + 's');
+        return setTimeout(once, wait);
+      }
+      cb(e);
+    });
+    r.write(data);
+    r.end();
+  }
+  once();
 }
 
 // Build the prompt that asks Claude for structured Meta ad copy variations.
