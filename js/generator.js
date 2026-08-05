@@ -2289,6 +2289,18 @@ window.Ads = window.Ads || {};
       return '<option value="' + esc(v) + '"' + (String(v) === String(sel) ? ' selected' : '') + '>' + esc(l) + '</option>';
     }).join('');
   }
+  // Veo needs an inline image — same-origin URLs (e.g. /pfiles stills) convert on the fly
+  function imageToDataURL(src) {
+    if (/^data:/i.test(src)) return Promise.resolve(src);
+    return fetch(src).then(function (r) { if (!r.ok) throw new Error('image unavailable'); return r.blob(); }).then(function (b) {
+      return new Promise(function (res, rej) {
+        var fr = new FileReader();
+        fr.onload = function () { res(String(fr.result)); };
+        fr.onerror = function () { rej(new Error('could not read the image')); };
+        fr.readAsDataURL(b);
+      });
+    });
+  }
   function editModal(srcSpec, opts) {
     opts = opts || {};
     var s = clone(srcSpec); // work on a copy until Save
@@ -2344,6 +2356,15 @@ window.Ads = window.Ads || {};
             f('Camera move', '<select class="select" data-ek="dna.bgMove">' + opt([{ value: 'drift', label: 'Drift' }, { value: 'pushIn', label: 'Push in' }, { value: 'pushOut', label: 'Push out' }, { value: 'panL', label: 'Pan left' }, { value: 'panR', label: 'Pan right' }], (s.dna && s.dna.bgMove) || 'drift') + '</select>') +
             f('Colour grade', '<select class="select" data-ek="dna.grade">' + opt([{ value: 'none', label: 'None' }, { value: 'duotone', label: 'Duotone' }, { value: 'warm', label: 'Warm' }, { value: 'noir', label: 'Noir' }, { value: 'vivid', label: 'Vivid' }], (s.dna && s.dna.grade) || 'none') + '</select>') +
           '</div>' : '') +
+          (s.kind === 'video' && !s.bgVideo && s.images && s.images.product ?
+            (function () {
+              var existing = genImagesList().filter(function (g) { return g.videoURL && g.dataURL === s.images.product; })[0];
+              return '<div class="field"><label>Real footage</label>' +
+                '<button class="btn is-sm" id="em-film">🎬 ' + (existing ? 'Use your AI clip — free' : 'Film this still into a real clip (Veo)') + '</button>' +
+                '<div class="hint" style="margin-top:0.6rem">' + (existing
+                  ? 'You already animated this exact image — apply its real footage to this ad instantly.'
+                  : 'Veo brings the ad’s image to life as an 8-second vertical clip that loops under the copy (~$1–2, billed by Google, takes 1–3 min — keep this window open).') + '</div></div>';
+            })() : '') +
           '<div class="field-row">' +
             f('Template', '<select class="select" data-ek="template">' + opt(tplOptions, s.template) + '</select>') +
             f('Format', '<select class="select" data-ek="format">' + opt(fmtOptions, s.format) + '</select>') +
@@ -2424,6 +2445,42 @@ window.Ads = window.Ads || {};
         var ac = m.querySelector('#em-accent'), ah = m.querySelector('#em-accent-hex');
         ac.addEventListener('input', function () { ah.value = ac.value; s.accent = ac.value; remount(m); });
         ah.addEventListener('input', function () { if (/^#[0-9a-f]{6}$/i.test(ah.value)) { ac.value = ah.value; s.accent = ah.value; remount(m); } });
+        // 🎬 convert this still video ad into REAL footage (existing clip = free)
+        var film = m.querySelector('#em-film');
+        if (film) film.addEventListener('click', function () {
+          var pid0 = ensureProject().id;
+          function applyClip(url) {
+            s.bgVideo = url; s.clip = null; s.motion = 'footage'; s.visualSource = 'aiclip';
+            film.disabled = true; film.textContent = '🎬 Real clip applied — press Save';
+            remount(m);
+            Ads.toast('This ad now plays real footage — press Save to keep it');
+          }
+          var existing = genImagesList().filter(function (g) { return g.videoURL && g.dataURL === s.images.product; })[0];
+          if (existing) return applyClip(existing.videoURL);
+          Ads.confirm({
+            title: 'Film this still into a real clip?',
+            message: 'Veo animates the ad’s image into an 8-second vertical clip (~$1–2, billed by Google to your Gemini key). Takes 1–3 minutes — keep this window open.',
+            okLabel: 'Film it',
+            onConfirm: function () {
+              film.disabled = true; film.innerHTML = '<span class="spinner"></span> Filming… (1–3 min)';
+              imageToDataURL(s.images.product).then(function (durl) {
+                var gi = genImagesList().filter(function (g) { return g.dataURL === durl; })[0];
+                var prompt = (gi && gi.prompt) || [s.angle, ((s.headlineStart || '') + ' ' + (s.headlineHighlight || '')).trim(), s.subtext].filter(Boolean).join('. ');
+                return ai.genClip({ project: pid0, prompt: prompt, image: durl }).then(function (resp) {
+                  // remember the clip on the source image too — every future use is free
+                  if (gi) {
+                    var proj = store.getProject(pid0);
+                    if (proj) store.updateProject(pid0, { genImages: (proj.genImages || []).map(function (x) { return x.id === gi.id ? Object.assign({}, x, { videoURL: resp.url }) : x; }) });
+                  }
+                  applyClip(resp.url);
+                });
+              }).catch(function (e) {
+                film.disabled = false; film.textContent = '🎬 Film this still into a real clip (Veo)';
+                Ads.toast('Could not film the clip: ' + (e && e.message || 'failed'), true);
+              });
+            }
+          });
+        });
         m.querySelectorAll('[data-eup]').forEach(function (b) {
           b.addEventListener('click', function () {
             Ads.pickImage(function (durl) { s.images[b.getAttribute('data-eup')] = durl; rerenderModal(); });
