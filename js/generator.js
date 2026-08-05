@@ -776,7 +776,7 @@ window.Ads = window.Ads || {};
             (!g.placeholder && !g.videoURL && !gen.animBusy[g.id]
               ? '<button class="gi-anim" data-gi-anim="' + i + '" title="Animate into a real video clip with Veo (~$1–2, billed by Google, takes 1–3 min)">🎬</button>' : '') +
             (gen.animBusy[g.id] ? '<div class="gi-animating"><span class="spinner"></span> filming…</div>' : '') +
-            (g.videoURL ? '<div class="gi-clipbadge">🎬 CLIP</div>' : '') +
+            (g.videoURL ? '<a class="gi-clipbadge" href="' + esc(g.videoURL) + '" target="_blank" title="Watch the raw clip">🎬 CLIP</a>' : '') +
             (g.label ? '<div class="gi-label">' + esc(g.label) + '</div>' : '') +
           '</div>';
         }).join('') + '</div>'
@@ -2306,11 +2306,14 @@ window.Ads = window.Ads || {};
     opts = opts || {};
     var s = clone(srcSpec); // work on a copy until Save
     var pool = imagePool();
+    var prevCtrl = null;    // live video preview controller — stopped on every remount
     var remount = util.debounce(function (m) {
       var prev = m.querySelector('#em-preview');
       if (prev) {
+        if (prevCtrl) { try { prevCtrl.stop(); } catch (e) {} prevCtrl = null; }
         var w = (prev.parentElement.clientWidth - 24) || 320;
-        if (s.kind === 'video' && Ads.video) { w = Math.min(w, 300); prev.style.width = w + 'px'; Ads.video.mount(prev, s, false); }
+        // video ads preview LIVE here — this is where you check a real clip
+        if (s.kind === 'video' && Ads.video) { w = Math.min(w, 300); prev.style.width = w + 'px'; prevCtrl = Ads.video.mount(prev, s, true); }
         else { prev.style.width = ''; render.mount(prev, s, w); }
       }
       var cap = m.querySelector('#em-cap-prev');
@@ -2357,14 +2360,26 @@ window.Ads = window.Ads || {};
             f('Camera move', '<select class="select" data-ek="dna.bgMove">' + opt([{ value: 'drift', label: 'Drift' }, { value: 'pushIn', label: 'Push in' }, { value: 'pushOut', label: 'Push out' }, { value: 'panL', label: 'Pan left' }, { value: 'panR', label: 'Pan right' }], (s.dna && s.dna.bgMove) || 'drift') + '</select>') +
             f('Colour grade', '<select class="select" data-ek="dna.grade">' + opt([{ value: 'none', label: 'None' }, { value: 'duotone', label: 'Duotone' }, { value: 'warm', label: 'Warm' }, { value: 'noir', label: 'Noir' }, { value: 'vivid', label: 'Vivid' }], (s.dna && s.dna.grade) || 'none') + '</select>') +
           '</div>' : '') +
-          (s.kind === 'video' && !s.bgVideo && s.images && s.images.product ?
+          (s.kind === 'video' && s.images && s.images.product ?
             (function () {
-              var existing = genImagesList().filter(function (g) { return g.videoURL && g.dataURL === s.images.product; })[0];
-              return '<div class="field"><label>Real footage</label>' +
-                '<button class="btn is-sm" id="em-film">🎬 ' + (existing ? 'Use your AI clip — free' : 'Film this still into a real clip (Veo)') + '</button>' +
-                '<div class="hint" style="margin-top:0.6rem">' + (existing
-                  ? 'You already animated this exact image — apply its real footage to this ad instantly.'
-                  : 'Veo brings the ad’s image to life as an 8-second vertical clip that loops under the copy (~$1–2, billed by Google, takes 1–3 min — keep this window open).') + '</div></div>';
+              if (!s.bgVideo) {
+                var existing = genImagesList().filter(function (g) { return g.videoURL && g.dataURL === s.images.product; })[0];
+                return '<div class="field"><label>Real footage</label>' +
+                  '<button class="btn is-sm" id="em-film">🎬 ' + (existing ? 'Use your AI clip — free' : 'Film this still into a real clip (Veo)') + '</button>' +
+                  '<div class="hint" style="margin-top:0.6rem">' + (existing
+                    ? 'You already animated this exact image — apply its real footage to this ad instantly.'
+                    : 'Veo brings the ad’s image to life as an 8-second vertical clip that loops under the copy (~$1–2, billed by Google, takes 1–3 min — keep this window open).') + '</div></div>';
+              }
+              var isAiClip = /-aiclip\.mp4$/i.test(s.bgVideo) || genImagesList().some(function (g) { return g.videoURL === s.bgVideo; });
+              if (isAiClip) {
+                return '<div class="field"><label>Real footage — AI clip</label>' +
+                  '<div class="btn-row">' +
+                    '<button class="btn is-sm" id="em-refilm">🎬 Re-film this clip (Veo)</button>' +
+                    '<button class="btn is-ghost is-sm" id="em-declip">Remove clip</button>' +
+                  '</div>' +
+                  '<div class="hint" style="margin-top:0.6rem">The preview on the right plays the current clip live. Re-film for a fresh take from the same image (~$1–2, billed by Google, 1–3 min), or remove it to fall back to designed motion.</div></div>';
+              }
+              return '';
             })() : '') +
           '<div class="field-row">' +
             f('Template', '<select class="select" data-ek="template">' + opt(tplOptions, s.template) + '</select>') +
@@ -2481,6 +2496,42 @@ window.Ads = window.Ads || {};
               });
             }
           });
+        });
+        // 🎬 AI-clip ads: fresh take from the same image, or back to designed motion
+        var refilm = m.querySelector('#em-refilm');
+        if (refilm) refilm.addEventListener('click', function () {
+          var pid1 = ensureProject().id;
+          Ads.confirm({
+            title: 'Re-film this clip?',
+            message: 'Veo films a fresh 8-second take from the same image (~$1–2, billed by Google). The new clip replaces this ad’s footage — and updates the source image, so other ads using it pick up the new take too. Takes 1–3 minutes.',
+            okLabel: 'Re-film',
+            onConfirm: function () {
+              refilm.disabled = true; refilm.innerHTML = '<span class="spinner"></span> Filming… (1–3 min)';
+              imageToDataURL(s.images.product).then(function (durl) {
+                var gi = genImagesList().filter(function (g) { return g.dataURL === durl || g.videoURL === s.bgVideo; })[0];
+                var prompt = (gi && gi.prompt) || [s.angle, ((s.headlineStart || '') + ' ' + (s.headlineHighlight || '')).trim(), s.subtext].filter(Boolean).join('. ');
+                return ai.genClip({ project: pid1, prompt: prompt, image: durl }).then(function (resp) {
+                  if (gi) {
+                    var proj = store.getProject(pid1);
+                    if (proj) store.updateProject(pid1, { genImages: (proj.genImages || []).map(function (x) { return x.id === gi.id ? Object.assign({}, x, { videoURL: resp.url }) : x; }) });
+                  }
+                  s.bgVideo = resp.url; s.clip = null; s.motion = 'footage'; s.visualSource = 'aiclip';
+                  refilm.disabled = false; refilm.textContent = '🎬 Re-film this clip (Veo)';
+                  remount(m);
+                  Ads.toast('Fresh take applied — the preview is playing it. Press Save to keep it.');
+                });
+              }).catch(function (e) {
+                refilm.disabled = false; refilm.textContent = '🎬 Re-film this clip (Veo)';
+                Ads.toast('Could not re-film: ' + (e && e.message || 'failed'), true);
+              });
+            }
+          });
+        });
+        var declip = m.querySelector('#em-declip');
+        if (declip) declip.addEventListener('click', function () {
+          s.bgVideo = null; s.clip = null; s.motion = 'showcase'; s.visualSource = 'aiimage';
+          Ads.toast('Clip removed — back to designed motion. Press Save to keep it.');
+          rerenderModal();
         });
         m.querySelectorAll('[data-eup]').forEach(function (b) {
           b.addEventListener('click', function () {

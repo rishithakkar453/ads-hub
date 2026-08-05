@@ -567,6 +567,9 @@ window.Ads = window.Ads || {};
       var start = null;
       function step(ts) {
         if (ctrl.stopped) return;
+        // the slot was re-rendered / the modal closed without stop() — kill the
+        // loop and its decoder instead of animating a detached canvas forever
+        if (!canvas.isConnected) return ctrl.stop();
         if (start == null) start = ts;
         var t = ((ts - start) / 1000) % DURATION;
         kickPlay(assets.video);   // self-heal: power-saving / interrupted play()
