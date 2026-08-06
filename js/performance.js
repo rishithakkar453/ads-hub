@@ -20,6 +20,18 @@ window.Ads = window.Ads || {};
     if (ad.kind === 'video' && Ads.video) Ads.video.mount(el, ad, false);
     else render.thumb(el, ad, w, h);
   }
+  // Mount a thumb so it FITS a maxW×maxH box: tall formats (9:16 video) get a
+  // second, narrower pass instead of blowing the card open.
+  function mountThumbFitted(el, ad, maxW, maxH) {
+    el.style.width = maxW + 'px';
+    thumbFor(el, ad, maxW, null);
+    var h = el.offsetHeight || (el.firstChild && el.firstChild.offsetHeight) || 0;
+    if (h > maxH && h > 0) {
+      var w2 = Math.max(80, Math.floor(maxW * maxH / h));
+      el.style.width = w2 + 'px';
+      thumbFor(el, ad, w2, null);
+    }
+  }
 
   var STATUS = [
     { id: 'draft', label: 'Draft' }, { id: 'approved', label: 'Approved' }, { id: 'active', label: 'Active' },
@@ -858,6 +870,30 @@ window.Ads = window.Ads || {};
     var p = store.getProject(pid); if (!p) return;
     store.updateProject(pid, { rounds: projRounds(p).map(function (r) { return r.id === rid ? Object.assign({}, r, patch) : r; }) });
   }
+  function planCardHTML(d, approved) {
+    var platRows = (d.perPlatform || []).map(function (x) {
+      return '<div class="pp-platrow"><div class="pp-platname"><strong>' + esc(x.platform) + '</strong><span>' + esc(x.budget) + (x.share ? ' · ' + esc(x.share) : '') + '</span></div>' +
+        '<div class="pp-platwhy">' + esc(x.why) + (x.targeting ? ' <em>' + esc(x.targeting) + '</em>' : '') +
+        (x.placements && x.placements.length ? '<div class="u-faint" style="margin-top:0.3rem">' + esc(x.placements.join(' · ')) + '</div>' : '') + '</div></div>';
+    }).join('');
+    var adRows = (d.adPlan || []).map(function (x) {
+      return '<div class="pp-adrow"><strong>' + esc(x.ad) + '</strong> → ' + esc((x.platforms || []).join(', ')) +
+        (x.budget ? ' · <b>' + esc(x.budget) + '</b>' : '') +
+        (x.segment ? ' · aimed at <em>' + esc(x.segment) + '</em>' : '') +
+        (x.note ? '<div class="u-faint">' + esc(x.note) + '</div>' : '') + '</div>';
+    }).join('');
+    return '<div class="pp-plan is-card">' +
+      (approved ? '<div class="pp-approved">✓ Approved — ready to launch</div>' : '') +
+      '<p class="pp-strategy">' + esc(d.strategy) + '</p>' +
+      (d.duration ? '<p class="pp-line"><b>Run:</b> ' + esc(d.duration) + '</p>' : '') +
+      (platRows ? '<div class="u-label" style="margin:1.2rem 0 0.6rem">Where the money goes</div>' + platRows : '') +
+      (adRows ? '<div class="u-label" style="margin:1.4rem 0 0.6rem">Ad by ad</div>' + adRows : '') +
+      (d.schedule ? '<p class="pp-line"><b>Schedule:</b> ' + esc(d.schedule) + '</p>' : '') +
+      (d.expectations ? '<p class="pp-line"><b>What to expect:</b> ' + esc(d.expectations) + '</p>' : '') +
+      (d.checkpoints ? '<p class="pp-line"><b>Checkpoints:</b> ' + esc(d.checkpoints) + '</p>' : '') +
+      (d.warnings ? '<p class="pp-warn">⚠ ' + esc(d.warnings) + '</p>' : '') +
+    '</div>';
+  }
   function planSectionHTML(p, rounds) {
     if (!rounds.length) return '';
     var r = planRoundOf(rounds);
@@ -867,79 +903,73 @@ window.Ads = window.Ads || {};
         }).join('') + '</select>'
       : '';
     var plan = r.plan;
-    var inner;
-    if (plan && plan.data) {
-      var d = plan.data;
-      var platRows = d.perPlatform.map(function (x) {
-        return '<div class="pp-platrow"><div class="pp-platname"><strong>' + esc(x.platform) + '</strong><span>' + esc(x.budget) + (x.share ? ' · ' + esc(x.share) : '') + '</span></div>' +
-          '<div class="pp-platwhy">' + esc(x.why) + (x.targeting ? ' <em>' + esc(x.targeting) + '</em>' : '') +
-          (x.placements.length ? '<div class="u-faint" style="margin-top:0.3rem">' + esc(x.placements.join(' · ')) + '</div>' : '') + '</div></div>';
-      }).join('');
-      var adRows = d.adPlan.map(function (x) {
-        return '<div class="pp-adrow"><strong>' + esc(x.ad) + '</strong> → ' + esc(x.platforms.join(', ')) +
-          (x.budget ? ' · <b>' + esc(x.budget) + '</b>' : '') +
-          (x.segment ? ' · aimed at <em>' + esc(x.segment) + '</em>' : '') +
-          (x.note ? '<div class="u-faint">' + esc(x.note) + '</div>' : '') + '</div>';
-      }).join('');
-      inner =
-        '<div class="pp-plan">' +
-          (plan.approved ? '<div class="pp-approved">✓ Plan approved — ready to launch</div>' : '') +
-          '<p class="pp-strategy">' + esc(d.strategy) + '</p>' +
-          (d.duration ? '<p class="pp-line"><b>Run:</b> ' + esc(d.duration) + '</p>' : '') +
-          '<div class="u-label" style="margin:1.2rem 0 0.6rem">Where the money goes</div>' + platRows +
-          '<div class="u-label" style="margin:1.4rem 0 0.6rem">Ad by ad</div>' + adRows +
-          (d.schedule ? '<p class="pp-line"><b>Schedule:</b> ' + esc(d.schedule) + '</p>' : '') +
-          (d.expectations ? '<p class="pp-line"><b>What to expect:</b> ' + esc(d.expectations) + '</p>' : '') +
-          (d.checkpoints ? '<p class="pp-line"><b>Checkpoints:</b> ' + esc(d.checkpoints) + '</p>' : '') +
-          (d.warnings ? '<p class="pp-warn">⚠ ' + esc(d.warnings) + '</p>' : '') +
-          '<div class="btn-row" style="margin-top:1.6rem">' +
-            (plan.approved
-              ? '<button class="btn is-primary" id="pp-post">🚀 Post this round now</button>'
-              : '<button class="btn is-primary is-sm" id="pp-approve">Approve plan</button>') +
-            '<button class="btn is-ghost is-sm" id="pp-modify">Modify plan</button>' +
-            '<button class="btn is-ghost is-sm" id="pp-discard">Discard</button>' +
-          '</div>' +
-          '<div class="pp-modbox" id="pp-modbox" style="display:none">' +
-            '<div class="field"><label>What should change?</label><textarea class="textarea" id="pp-modtext" placeholder="e.g. put more into Instagram, cap TikTok at 20%, run 3 weeks instead"></textarea></div>' +
-            '<button class="btn is-sm" id="pp-rerun">Re-run with changes</button>' +
-          '</div>' +
-          '<div class="gh-status" id="pp-status"></div>' +
-        '</div>';
-    } else {
-      var priorIn = (plan && plan.input) || {};
-      var platsOn = priorIn.platforms || ['ig', 'fb'];
-      var chips = ROUND_PLATFORMS.map(function (pl) {
-        return '<label class="pp-chip"><input type="checkbox" data-pp-plat="' + pl.id + '"' + (platsOn.indexOf(pl.id) >= 0 ? ' checked' : '') + '><span>' + pl.label + '</span></label>';
-      }).join('');
-      inner =
-        (p.audience && p.audience.data ? '' : '<div class="hint" style="margin-bottom:1rem">⚠ Run <strong>Analyze best target audience</strong> in the generator first — the plan aims your spend at it.</div>') +
-        '<div class="field-row">' +
-          '<div class="field"><label>Budget (' + esc(sym()) + ')</label><input class="input" id="pp-budget" inputmode="decimal" placeholder="500" value="' + esc(priorIn.budget || '') + '"></div>' +
-          '<div class="field"><label>Platforms</label><div class="pp-chips">' + chips + '</div></div>' +
-        '</div>' +
-        '<div class="field"><label>Anything else the plan should respect</label><textarea class="textarea" id="pp-details" placeholder="e.g. launch Friday, prioritize the voice-regret angle, keep daily spend even">' + esc(priorIn.details || '') + '</textarea></div>' +
-        '<div class="btn-row"><button class="btn is-primary is-sm" id="pp-run">Run — build the game plan</button></div>' +
-        '<div class="gh-status" id="pp-status"></div>';
+    var chat = Array.isArray(r.planChat) ? r.planChat : [];
+    var priorIn = (plan && plan.input) || {};
+    var platsOn = priorIn.platforms || ['ig', 'fb'];
+    var chips = ROUND_PLATFORMS.map(function (pl) {
+      return '<label class="pp-chip"><input type="checkbox" data-pp-plat="' + pl.id + '"' + (platsOn.indexOf(pl.id) >= 0 ? ' checked' : '') + '><span>' + pl.label + '</span></label>';
+    }).join('');
+    var thread = chat.map(function (m, i) {
+      if (m.who === 'you') return '<div class="ppc-msg is-you">' + esc(m.text || '') + '</div>';
+      if (m.plan) {
+        var isLatest = plan && plan.data && i === chat.length - 1;
+        return '<div class="ppc-msg is-ai is-plan">' + planCardHTML(m.plan, isLatest && plan.approved) + '</div>';
+      }
+      return '<div class="ppc-msg is-ai">' + esc(m.text || '') + '</div>';
+    }).join('');
+    if (!thread) {
+      thread = '<div class="ppc-msg is-ai">Tell me what you want to do — e.g. <em>“$500 on Instagram and Facebook, launch Friday, push the voice-regret angle hardest”</em>. I’ll build the game plan from this round’s ads and your audience analysis' +
+        (p.audience && p.audience.data ? '' : ' <strong>(tip: run “Analyze best target audience” in the generator first — the plan aims at it)</strong>') +
+        ' — then keep talking to change anything.</div>';
     }
     return '<div class="view-section" id="rndf-post"><div class="section-head"><h2>Post this round</h2>' +
-      '<span class="section-action">' + sel + '</span></div>' + inner + '</div>';
+      '<span class="section-action">' + sel + '</span></div>' +
+      '<div class="pp-quick">' +
+        '<div class="field" style="max-width:15rem;margin:0"><label>Budget (' + esc(sym()) + ')</label><input class="input" id="pp-budget" inputmode="decimal" placeholder="500" value="' + esc(priorIn.budget || '') + '"></div>' +
+        '<div class="field" style="margin:0"><label>Platforms</label><div class="pp-chips">' + chips + '</div></div>' +
+      '</div>' +
+      '<div class="ppc-thread" id="ppc-thread">' + thread + '</div>' +
+      (plan && plan.data ? '<div class="btn-row" style="margin:1.2rem 0 0.4rem">' +
+          (plan.approved
+            ? '<button class="btn is-primary" id="pp-post">🚀 Post this round now</button>'
+            : '<button class="btn is-primary is-sm" id="pp-approve">Approve this plan</button>') +
+          '<button class="btn is-ghost is-sm" id="pp-discard">Start over</button>' +
+        '</div>' : '') +
+      '<div class="ppc-bar">' +
+        '<input class="input" id="ppc-input" placeholder="' + (plan && plan.data ? 'Tell me what to change…' : 'Describe the launch — budget, platforms, timing, priorities…') + '">' +
+        '<button class="btn is-sm is-primary" id="ppc-send">Send</button>' +
+      '</div>' +
+    '</div>';
   }
   function bindPlanSection(el, p, rounds) {
     var box = el.querySelector('#rndf-post'); if (!box) return;
     var r = planRoundOf(rounds);
     var selEl = box.querySelector('#pp-round');
     if (selEl) selEl.addEventListener('change', function () { folderPlanRound = selEl.value; Ads.go('rounds'); });
-    function status(t) { var s = box.querySelector('#pp-status'); if (s) s.innerHTML = t ? '<span class="spinner"></span> ' + esc(t) : ''; }
-    function runPlan(modifyNote, prior) {
-      var budget, plats, details;
-      if (modifyNote != null && r.plan) {
-        budget = r.plan.input.budget; plats = r.plan.input.platforms; details = r.plan.input.details;
-      } else {
-        budget = (box.querySelector('#pp-budget').value || '').trim();
-        plats = [].map.call(box.querySelectorAll('[data-pp-plat]'), function (c) { return c.checked ? c.getAttribute('data-pp-plat') : null; }).filter(Boolean);
-        details = (box.querySelector('#pp-details').value || '').trim();
-        if (!budget || isNaN(parseFloat(budget)) || parseFloat(budget) <= 0) { Ads.toast('Give the plan a real budget first', true); return; }
-        if (!plats.length) { Ads.toast('Pick at least one platform', true); return; }
+    var thread = box.querySelector('#ppc-thread');
+    if (thread) thread.scrollTop = thread.scrollHeight;
+    function pushChat(entry) {
+      var p2 = store.getProject(p.id); if (!p2) return;
+      var r2 = projRounds(p2).filter(function (x) { return x.id === r.id; })[0]; if (!r2) return;
+      var chat = (Array.isArray(r2.planChat) ? r2.planChat : []).concat([entry]).slice(-30);
+      updateRound(p.id, r.id, { planChat: chat });
+    }
+    function send() {
+      var input = box.querySelector('#ppc-input');
+      var msg = (input.value || '').trim();
+      var budget = (box.querySelector('#pp-budget').value || '').trim();
+      var plats = [].map.call(box.querySelectorAll('[data-pp-plat]'), function (c) { return c.checked ? c.getAttribute('data-pp-plat') : null; }).filter(Boolean);
+      if (!msg && !(budget && !r.plan)) { Ads.toast('Say what you want the plan to do', true); return; }
+      if (!budget || isNaN(parseFloat(budget)) || parseFloat(budget) <= 0) { Ads.toast('Set the budget box first — the plan allocates real money', true); return; }
+      if (!plats.length) { Ads.toast('Pick at least one platform', true); return; }
+      var shown = msg || ('Plan ' + budget + ' ' + sym() + ' across ' + plats.join(', '));
+      // show the message + a thinking bubble immediately
+      pushChat({ who: 'you', text: shown, at: util.nowISO() });
+      input.value = ''; input.disabled = true;
+      box.querySelector('#ppc-send').disabled = true;
+      if (thread) {
+        thread.insertAdjacentHTML('beforeend', '<div class="ppc-msg is-you">' + esc(shown) + '</div><div class="ppc-msg is-ai" id="ppc-wait"><span class="spinner"></span> Working on the plan…</div>');
+        thread.scrollTop = thread.scrollHeight;
       }
       var byKey = savedByKey(p), snap = snapAds();
       var names = { ig: 'Instagram', fb: 'Facebook', tt: 'TikTok', x: 'X (Twitter)' };
@@ -951,49 +981,45 @@ window.Ads = window.Ads || {};
           (st.clicks ? ' | so far: ' + st.clicks + ' clicks, ' + (st.outs || 0) + ' site visits' : '');
       }).filter(Boolean).join('\n');
       var aud = p.audience && p.audience.data ? JSON.stringify(p.audience.data).slice(0, 9000) : 'No audience analysis available — plan from the ads themselves.';
+      var r2 = projRounds(store.getProject(p.id)).filter(function (x) { return x.id === r.id; })[0] || r;
+      var history = (r2.planChat || []).slice(-8).map(function (m) {
+        if (m.who === 'you') return 'ADVERTISER: ' + (m.text || '');
+        if (m.plan) return 'YOUR PRIOR PLAN (summary): ' + String(m.plan.strategy || '').slice(0, 300);
+        return null;
+      }).filter(Boolean).join('\n');
       var ctx =
         '== THE ROUND ==\nRound "' + r.name + '" — ' + r.adKeys.length + ' ads:\n' + adsTxt +
         '\n\n== BUDGET ==\nTotal: ' + budget + ' ' + sym() + '. Platforms the advertiser chose: ' + plats.map(function (x) { return names[x] || x; }).join(', ') + '.' +
         '\n\n== AUDIENCE ANALYSIS (researched — aim the spend at this) ==\n' + aud +
-        (details ? '\n\n== ADVERTISER INSTRUCTIONS ==\n' + details : '') +
-        (modifyNote ? '\n\n== PRIOR PLAN ==\n' + JSON.stringify(prior).slice(0, 6000) + '\n\n== REVISION REQUEST (must be respected) ==\n' + modifyNote : '');
-      status(modifyNote ? 'Revising the game plan…' : 'Building the game plan from your budget, ads and audience…');
-      var runBtn = box.querySelector('#pp-run') || box.querySelector('#pp-rerun');
-      if (runBtn) runBtn.disabled = true;
+        (r.plan && r.plan.data ? '\n\n== CURRENT PLAN (revise it, keep what was not questioned) ==\n' + JSON.stringify(r.plan.data).slice(0, 6000) : '') +
+        (history ? '\n\n== CONVERSATION SO FAR ==\n' + history : '') +
+        (msg ? '\n\n== THE ADVERTISER JUST SAID (respect this above all) ==\n' + msg : '');
       ai().mediaPlan({ context: ctx }).then(function (plan) {
-        updateRound(p.id, r.id, { plan: { at: util.nowISO(), input: { budget: budget, platforms: plats, details: details }, data: plan, approved: false } });
+        pushChat({ who: 'ai', plan: plan, at: util.nowISO() });
+        updateRound(p.id, r.id, { plan: { at: util.nowISO(), input: { budget: budget, platforms: plats, details: msg }, data: plan, approved: false } });
         Ads.go('rounds');
-        Ads.toast('Game plan ready — read it through, then approve or modify');
       }).catch(function (e) {
-        status('');
-        if (runBtn) runBtn.disabled = false;
+        var w = box.querySelector('#ppc-wait'); if (w) w.remove();
+        input.disabled = false; box.querySelector('#ppc-send').disabled = false;
         Ads.toast('Planning failed: ' + (e && e.message || 'unknown'), true);
       });
     }
-    var run = box.querySelector('#pp-run');
-    if (run) run.addEventListener('click', function () { runPlan(null, null); });
+    var sendBtn = box.querySelector('#ppc-send');
+    if (sendBtn) sendBtn.addEventListener('click', send);
+    var inp = box.querySelector('#ppc-input');
+    if (inp) inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); send(); } });
     var approve = box.querySelector('#pp-approve');
     if (approve) approve.addEventListener('click', function () {
       updateRound(p.id, r.id, { plan: Object.assign({}, r.plan, { approved: true }) });
       Ads.go('rounds');
       Ads.toast('Plan approved');
     });
-    var modify = box.querySelector('#pp-modify');
-    if (modify) modify.addEventListener('click', function () {
-      var mb = box.querySelector('#pp-modbox'); if (mb) mb.style.display = mb.style.display === 'none' ? '' : 'none';
-    });
-    var rerun = box.querySelector('#pp-rerun');
-    if (rerun) rerun.addEventListener('click', function () {
-      var note = (box.querySelector('#pp-modtext').value || '').trim();
-      if (!note) { Ads.toast('Say what should change first', true); return; }
-      runPlan(note, r.plan.data);
-    });
     var discard = box.querySelector('#pp-discard');
     if (discard) discard.addEventListener('click', function () {
       Ads.confirm({
-        title: 'Discard this plan?', message: 'The round and its ads stay — only the plan is removed.',
-        danger: true, okLabel: 'Discard',
-        onConfirm: function () { updateRound(p.id, r.id, { plan: null }); Ads.go('rounds'); }
+        title: 'Start the plan over?', message: 'The round and its ads stay — the plan and this conversation are cleared.',
+        danger: true, okLabel: 'Start over',
+        onConfirm: function () { updateRound(p.id, r.id, { plan: null, planChat: [] }); Ads.go('rounds'); }
       });
     });
     var post = box.querySelector('#pp-post');
@@ -1006,7 +1032,7 @@ window.Ads = window.Ads || {};
             '<li>Grant it your ad account, Facebook Page and Instagram account</li>' +
             '<li>Generate a token with <strong>ads_management</strong>, <strong>pages_manage_posts</strong>, <strong>instagram_content_publish</strong></li>' +
           '</ol>' +
-          '<p class="u-muted">Tell Claude the token is ready and posting gets wired here — this button will then publish the approved plan directly. Until then, post manually: each ad’s platform links live under <strong>Links</strong> below.</p>' +
+          '<p class="u-muted">Tell Claude the token is ready and posting gets wired here — this button will then publish the approved plan directly. Until then, post manually: each ad’s platform links are one click away below.</p>' +
           '<div class="btn-row" style="margin-top:1.4rem"><button class="btn is-ghost is-sm" id="pp-links">Open the round’s links</button></div>',
         foot: [{ label: 'Close', act: 'cancel', ghost: true }],
         onMount: function (m) {
@@ -1034,7 +1060,7 @@ window.Ads = window.Ads || {};
     var list = saved.map(function (a, i) {
       var key = a.adKey;
       return '<div class="fp-item rnd-card' + (sel[key] ? ' is-on' : '') + '" data-rk="' + esc(key) + '">' +
-        '<div class="rnd-thumb ad-stage-scaler" data-rt="' + esc(key) + '"></div>' +
+        '<div class="rnd-thumbwrap"><div class="rnd-thumb ad-stage-scaler" data-rt="' + esc(key) + '"></div></div>' +
         '<span class="fp-tick">✓</span>' +
         '<div class="rnd-cap"><strong>' + esc(a.angle || a.name || ('Ad ' + (i + 1))) + '</strong>' +
           '<span>' + (a.kind === 'video' ? '▶ video' : 'post') + (lk[key] ? '' : ' · ⚠ no landing page') + '</span></div>' +
@@ -1058,7 +1084,8 @@ window.Ads = window.Ads || {};
         });
         m.querySelectorAll('[data-rt]').forEach(function (n) {
           var a = byK[n.getAttribute('data-rt')]; if (!a) return;
-          try { thumbFor(n, a, n.clientWidth || 180, null); } catch (e) {}
+          var wrap = n.parentElement;
+          try { mountThumbFitted(n, a, (wrap && wrap.clientWidth) || 200, 205); } catch (e) {}
         });
         upd();
       },
