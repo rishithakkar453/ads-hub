@@ -153,6 +153,20 @@ window.Ads = window.Ads || {};
     });
   }
 
+  // Media plan: budget + platforms + the round's ads + the audience analysis →
+  // a concrete spend plan. Resolves { plan }.
+  function mediaPlan(opts) {
+    return fetch('/api/ai/mediaplan', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ads-Hub': '1' },
+      body: JSON.stringify({ context: opts.context })
+    }).then(function (r) {
+      return r.json().then(function (body) {
+        if (!r.ok) throw new Error(body && body.message ? body.message : ('Planning failed (' + r.status + ')'));
+        return body.plan;
+      });
+    });
+  }
+
   // Art-director image concepts: Claude studies the project + reference images
   // and returns N { label, prompt, why } ideas for ad visuals.
   function imageConcepts(opts) {
@@ -242,5 +256,5 @@ window.Ads = window.Ads || {};
       .then(function (r) { return r.json(); }).catch(function () { return { enabled: true, ok: false, error: 'Could not reach the key checker' }; });
   }
 
-  Ads.ai = { status: status, setKey: setKey, generateCopy: generateCopy, generateDossier: generateDossier, research: research, audience: audience, landingContent: landingContent, imageConcepts: imageConcepts, genImage: genImage, genImages: genImages, genClip: genClip, geminiStatus: geminiStatus, setGeminiKey: setGeminiKey, geminiVerify: geminiVerify, variationToSpec: variationToSpec, scrape: scrape, editSpec: editSpec };
+  Ads.ai = { status: status, setKey: setKey, generateCopy: generateCopy, generateDossier: generateDossier, research: research, audience: audience, landingContent: landingContent, imageConcepts: imageConcepts, genImage: genImage, genImages: genImages, genClip: genClip, geminiStatus: geminiStatus, setGeminiKey: setGeminiKey, geminiVerify: geminiVerify, mediaPlan: mediaPlan, variationToSpec: variationToSpec, scrape: scrape, editSpec: editSpec };
 })();

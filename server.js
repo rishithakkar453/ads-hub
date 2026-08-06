@@ -558,6 +558,61 @@ function parseDossierResponse(body) {
 // reviews and forum threads, then distils distinct PAIN POINTS — each with an
 // ad-ready hook, headline, tagline and description. If the org doesn't have
 // web search enabled we retry on model knowledge alone (labelled as such).
+// Media plan: given a budget, chosen platforms, the audience analysis and the
+// round's actual ads, produce a concrete spend plan the advertiser can approve.
+function buildMediaPlanRequest(input) {
+  var context = String(input.context || '').slice(0, 24000);
+  var system =
+    'You are a senior paid-social media buyer. An advertiser gives you a fixed budget, the platforms they ' +
+    'want, the exact ads they will run, and a researched audience analysis. You return a concrete, ' +
+    'executable plan — never generic advice. Rules: allocate the REAL budget numbers (they must sum to the ' +
+    'total); match specific ads to the specific audience segments they resonate with (use the analysis); ' +
+    'respect the advertiser’s extra instructions; be honest about what this budget can and cannot achieve; ' +
+    'plan checkpoints where underperformers get cut. You ONLY output valid JSON.';
+  var instruction = context +
+    '\n\nReturn ONLY a JSON object of this exact shape:\n' +
+    '{"strategy":"the game plan in one tight paragraph — where the money goes and why",' +
+    '"duration":"recommended run length and pacing",' +
+    '"perPlatform":[{"platform":"","budget":"amount with currency","share":"e.g. 60%","why":"","placements":["..."],"targeting":"who to aim at there, from the audience analysis"}],' +
+    '"adPlan":[{"ad":"the ad angle/name EXACTLY as given","platforms":["..."],"budget":"","segment":"which audience segment this ad speaks to","note":"format/scheduling note"}],' +
+    '"schedule":"when to launch what, in plain words",' +
+    '"expectations":"realistic outcomes for this budget (ranges, not promises)",' +
+    '"checkpoints":"when to check results and what to kill or scale",' +
+    '"warnings":"anything the advertiser should know before spending"}';
+  return { model: MODEL, max_tokens: 6000, system: system, messages: [{ role: 'user', content: instruction }] };
+}
+function parseMediaPlanResponse(body) {
+  var json = JSON.parse(body);
+  if (json.type === 'error') throw new Error((json.error && json.error.message) || 'API error');
+  if (json.stop_reason === 'max_tokens') throw new Error('The plan hit the output limit — try again');
+  var text = '';
+  (json.content || []).forEach(function (b) { if (b.type === 'text') text += b.text; });
+  text = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  var a = text.indexOf('{'), z = text.lastIndexOf('}');
+  if (a >= 0 && z > a) text = text.slice(a, z + 1);
+  var d = JSON.parse(text);
+  function str(v, n) { return v == null ? '' : String(v).slice(0, n || 700); }
+  function arr(v, n, len) { return Array.isArray(v) ? v.slice(0, n || 8).map(function (x) { return str(x, len || 120); }).filter(Boolean) : []; }
+  var plan = {
+    strategy: str(d.strategy, 1200),
+    duration: str(d.duration, 200),
+    perPlatform: (Array.isArray(d.perPlatform) ? d.perPlatform : []).slice(0, 6).map(function (x) {
+      x = x || {};
+      return { platform: str(x.platform, 40), budget: str(x.budget, 60), share: str(x.share, 20), why: str(x.why, 500), placements: arr(x.placements), targeting: str(x.targeting, 400) };
+    }),
+    adPlan: (Array.isArray(d.adPlan) ? d.adPlan : []).slice(0, 40).map(function (x) {
+      x = x || {};
+      return { ad: str(x.ad, 140), platforms: arr(x.platforms), budget: str(x.budget, 60), segment: str(x.segment, 120), note: str(x.note, 300) };
+    }),
+    schedule: str(d.schedule, 700),
+    expectations: str(d.expectations, 700),
+    checkpoints: str(d.checkpoints, 700),
+    warnings: str(d.warnings, 500)
+  };
+  if (!plan.strategy && !plan.perPlatform.length) throw new Error('No usable plan came back — try again');
+  return plan;
+}
+
 // Audience analysis: study EVERY piece of project material, then research the
 // live market, and answer the one question that decides ad spend — WHO should
 // these ads be shown to (age, gender, regions, platforms), and with which ads.
@@ -1920,6 +1975,22 @@ var server = http.createServer(function (req, res) {
       }
       run(buildResearchRequest(input, true), true, 0, '');
     });
+  }
+
+  // --- AI media plan (budget + platforms + ads + audience → executable plan) ---
+  if (pathname === '/api/ai/mediaplan' && req.method === 'POST') {
+    if (!effectiveKey()) return sendJSON(res, 501, { error: 'no_key', message: 'Turn on AI (top-right toggle) and add a key, or set ANTHROPIC_API_KEY.' });
+    return readBody(req, function (raw, overSize) {
+      if (raw == null) return sendJSON(res, 413, { error: 'too_large', message: 'Plan context too large (' + Math.round(overSize / 1e6) + 'MB)' });
+      var input; try { input = raw ? JSON.parse(raw) : {}; } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
+      if (!String(input.context || '').trim()) return sendJSON(res, 400, { error: 'no_context', message: 'Nothing to plan with.' });
+      callAnthropic(buildMediaPlanRequest(input), function (err, status, body) {
+        if (err) return sendJSON(res, 502, { error: 'upstream', message: String(err.message || err) });
+        if (status < 200 || status >= 300) { var msg = body; try { msg = JSON.parse(body).error.message; } catch (e) {} return sendJSON(res, status, { error: 'api', message: msg }); }
+        try { return sendJSON(res, 200, { plan: parseMediaPlanResponse(body), model: MODEL }); }
+        catch (e2) { return sendJSON(res, 500, { error: 'parse', message: 'Could not parse the plan: ' + e2.message }); }
+      }, 300000);
+    }, 2 * 1024 * 1024);
   }
 
   // --- AI target-audience analysis (deep read of EVERYTHING + live market
