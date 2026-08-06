@@ -265,6 +265,7 @@ window.Ads = window.Ads || {};
       if (!Array.isArray(p.results)) p.results = [];
       if (!Array.isArray(p.savedAds)) p.savedAds = [];
       if (!Array.isArray(p.genImages)) p.genImages = [];
+      if (!Array.isArray(p.rounds)) p.rounds = [];   // posting rounds (Performance → Campaign Rounds)
     });
     state.ads.forEach(function (a) {
       if (!a.metrics) a.metrics = clone(EMPTY_METRICS);

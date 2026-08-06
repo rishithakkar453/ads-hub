@@ -558,6 +558,89 @@ function parseDossierResponse(body) {
 // reviews and forum threads, then distils distinct PAIN POINTS — each with an
 // ad-ready hook, headline, tagline and description. If the org doesn't have
 // web search enabled we retry on model knowledge alone (labelled as such).
+// Audience analysis: study EVERY piece of project material, then research the
+// live market, and answer the one question that decides ad spend — WHO should
+// these ads be shown to (age, gender, regions, platforms), and with which ads.
+function buildAudienceRequest(input, useWebSearch) {
+  var context = String(input.context || '').slice(0, 42000);
+  var brand = String(input.brand || 'the brand').slice(0, 80);
+
+  var system =
+    'You are a senior audience strategist and media planner for paid social. Brands hand you everything ' +
+    'they have, and you tell them exactly WHO to put their ads in front of — grounded, specific, honest.\n' +
+    'Method — in this order, taking your time:\n' +
+    '1) STUDY the supplied material end to end: what the product truly is, what it costs emotionally and ' +
+    'practically, every audience clue in the site copy, documents, research pain points (and WHO voices ' +
+    'each one), the saved ad angles that the advertiser chose to keep, and what the imagery portrays.\n' +
+    (useWebSearch
+      ? '2) RESEARCH the live market: demographic studies and surveys for this category, who actually buys ' +
+        'and who decides, platform usage by age and gender, regional and cultural patterns, competitor ' +
+        'audiences. Ground your numbers in what you find and note sources.\n'
+      : '2) Web search is unavailable — draw on your market knowledge and say so honestly in "evidence".\n') +
+    '3) SYNTHESIZE: distinct buyer segments (different motivations, not rephrasings), ranked by likelihood ' +
+    'to convert for THIS product, each mapped to the saved ad angles that would resonate with it.\n' +
+    'Rules: be specific (not "adults 18-65"); genders as honest splits, not defaults; regions concrete ' +
+    '(countries/metros and why); platforms where THIS segment actually is; never invent statistics — if ' +
+    'evidence is thin, say so. You ONLY output valid JSON (after any research).';
+
+  var instruction =
+    'Everything ' + brand + ' knows about itself, its market and its ads (study ALL of it first):\n"""\n' + context + '\n"""\n\n' +
+    'Now do your research and return ONLY a JSON object of this exact shape:\n' +
+    '{"summary":"one tight paragraph: who this product is really for and the single most important targeting insight",' +
+    '"primary":{"name":"segment name","who":"2-3 sentences describing them as real people","age":"e.g. 45-65","gender":"honest split e.g. ~65% female","regions":["..."],"platforms":["..."],"why":"why they convert best, grounded in the material + research"},' +
+    '"segments":[{"name":"","who":"","age":"","gender":"","regions":["..."],"income":"","platforms":["..."],"why":"","adAngles":["which saved ad angles/hooks fit this segment"],"evidence":"the strongest supporting finding + where it came from","priority":1}],' +
+    '"targeting":{"ageRange":"e.g. 35-64","genders":"e.g. all, skew female","locations":["countries/metros to start with"],"interests":["Meta interest/behavior targets"],"placements":["e.g. Instagram Feed, Facebook Feed, Reels"],"budgetSplit":"how to split spend across segments to start","notes":"practical launch advice in 2-3 sentences"},' +
+    '"avoid":"who NOT to spend on, and why"}\n' +
+    'Include 3-5 segments, priority 1 = best. JSON only after your research.';
+
+  var req = {
+    model: MODEL, max_tokens: 12000, system: system,
+    messages: [{ role: 'user', content: instruction }]
+  };
+  if (useWebSearch) req.tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 10 }];
+  return req;
+}
+function parseAudienceResponse(body, priorText) {
+  var json = JSON.parse(body);
+  if (json.type === 'error') throw new Error((json.error && json.error.message) || 'API error');
+  if (json.stop_reason === 'max_tokens') throw new Error('The analysis hit the output limit — try again');
+  var text = String(priorText || '');
+  (json.content || []).forEach(function (b) { if (b.type === 'text') text += b.text; });
+  text = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  var a = text.indexOf('{'), z = text.lastIndexOf('}');
+  if (a >= 0 && z > a) text = text.slice(a, z + 1);
+  var d = JSON.parse(text);
+  function str(v, n) { return v == null ? '' : String(v).slice(0, n || 600); }
+  function arr(v, n, len) { return Array.isArray(v) ? v.slice(0, n || 8).map(function (x) { return str(x, len || 120); }).filter(Boolean) : []; }
+  function seg(s) {
+    s = s || {};
+    return {
+      name: str(s.name, 80), who: str(s.who, 700), age: str(s.age, 40), gender: str(s.gender, 80),
+      regions: arr(s.regions), income: str(s.income, 120), platforms: arr(s.platforms),
+      why: str(s.why, 700), adAngles: arr(s.adAngles, 10, 160), evidence: str(s.evidence, 400),
+      priority: Math.max(1, Math.min(9, parseInt(s.priority, 10) || 9))
+    };
+  }
+  var t = d.targeting || {};
+  // a syntactically-valid but EMPTY answer must fail loudly, not silently
+  // overwrite a stored analysis with nothing (mirrors the research guard)
+  var segsIn = Array.isArray(d.segments) ? d.segments : [];
+  if (!String(d.summary || '').trim() && !segsIn.length && !(d.primary && d.primary.name)) {
+    throw new Error('No usable audience analysis came back — try again');
+  }
+  return {
+    summary: str(d.summary, 900),
+    primary: seg(d.primary),
+    segments: segsIn.slice(0, 6).map(seg)
+      .sort(function (x, y) { return x.priority - y.priority; }),
+    targeting: {
+      ageRange: str(t.ageRange, 40), genders: str(t.genders, 80), locations: arr(t.locations, 10),
+      interests: arr(t.interests, 14, 80), placements: arr(t.placements, 8),
+      budgetSplit: str(t.budgetSplit, 300), notes: str(t.notes, 500)
+    },
+    avoid: str(d.avoid, 400)
+  };
+}
 function buildResearchRequest(input, useWebSearch) {
   var topic = String(input.topic || '').slice(0, 300);
   var context = String(input.context || '').slice(0, 2500);
@@ -1689,7 +1772,8 @@ var server = http.createServer(function (req, res) {
   if (pathname === '/api/ai/genimages' && req.method === 'POST') {
     if (!requireAppHeader(req, res)) return;
     if (!effectiveGeminiKey()) return sendJSON(res, 501, { error: 'no_gemini_key', message: 'Add your Nano Banana (Gemini) API key to render real images.' });
-    return readBody(req, function (raw) {
+    return readBody(req, function (raw, overSize) {
+      if (raw == null) return sendJSON(res, 413, { error: 'too_large', message: 'Prompts too large (' + Math.round(overSize / 1e6) + 'MB)' });
       var input; try { input = raw ? JSON.parse(raw) : {}; } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
       var prompts = (Array.isArray(input.prompts) ? input.prompts : []).slice(0, 25)
         .map(function (p) { return String(p || '').slice(0, 4000); });
@@ -1836,6 +1920,41 @@ var server = http.createServer(function (req, res) {
       }
       run(buildResearchRequest(input, true), true, 0, '');
     });
+  }
+
+  // --- AI target-audience analysis (deep read of EVERYTHING + live market
+  // research) → who to advertise to: segments, demographics, regions, platforms
+  // and a Meta-ready targeting spec. Long web-search turns pause + continue.
+  if (pathname === '/api/ai/audience' && req.method === 'POST') {
+    if (!effectiveKey()) return sendJSON(res, 501, { error: 'no_key', message: 'Turn on AI (top-right toggle) and add a key, or set ANTHROPIC_API_KEY.' });
+    return readBody(req, function (raw, overSize) {
+      if (raw == null) return sendJSON(res, 413, { error: 'too_large', message: 'Context too large (' + Math.round(overSize / 1e6) + 'MB)' });
+      var input; try { input = raw ? JSON.parse(raw) : {}; } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
+      if (!String(input.context || '').trim()) return sendJSON(res, 400, { error: 'no_context', message: 'Nothing to analyze — add project material first.' });
+      function run(request, webSearch, hops, priorText) {
+        callAnthropic(request, function (err, status, body) {
+          if (err) return sendJSON(res, 502, { error: 'upstream', message: String(err.message || err) });
+          if (status < 200 || status >= 300) {
+            var msg = body; try { msg = JSON.parse(body).error.message; } catch (e) {}
+            if (webSearch && hops === 0 && status === 400 && /web_search/i.test(String(msg))) {
+              return run(buildAudienceRequest(input, false), false, 0, '');
+            }
+            return sendJSON(res, status, { error: 'api', message: msg });
+          }
+          var parsedBody; try { parsedBody = JSON.parse(body); } catch (e) { return sendJSON(res, 500, { error: 'parse', message: 'Bad upstream response' }); }
+          if (parsedBody.stop_reason === 'pause_turn') {
+            if (hops >= 3) return sendJSON(res, 504, { error: 'audience_timeout', message: 'The analysis ran too long — try again' });
+            var hopText = ''; (parsedBody.content || []).forEach(function (b) { if (b.type === 'text') hopText += b.text; });
+            var cont = buildAudienceRequest(input, webSearch);
+            cont.messages = request.messages.concat([{ role: 'assistant', content: parsedBody.content }]);
+            return run(cont, webSearch, hops + 1, (priorText || '') + hopText);
+          }
+          try { return sendJSON(res, 200, { audience: parseAudienceResponse(body, priorText), webSearch: webSearch, model: MODEL }); }
+          catch (e2) { return sendJSON(res, 500, { error: 'parse', message: 'Could not parse the analysis: ' + e2.message }); }
+        }, 480000);   // a thorough read + live research legitimately runs for minutes
+      }
+      run(buildAudienceRequest(input, true), true, 0, '');
+    }, 4 * 1024 * 1024);
   }
 
   // --- AI image concepts (art-directed prompts for ad visuals) ---

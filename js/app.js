@@ -70,6 +70,7 @@ Ads.registerView = function (id, def) { Ads.views[id] = def; };
     ] },
     { id: 'performance', label: 'Ad Performance', short: 'Performance', sub: 'Track + optimize', icon: icons.performance, views: [
       { id: 'dashboard', label: 'Dashboard', icon: icons.dashboard },
+      { id: 'rounds', label: 'Campaign Rounds', icon: icons.archive },
       { id: 'tracking', label: 'Live Tracking', icon: icons.globe },
       { id: 'ads', label: 'All Ads', icon: icons.ads },
       { id: 'compare', label: 'Compare', icon: icons.compare },

@@ -138,6 +138,21 @@ window.Ads = window.Ads || {};
     return out;
   }
 
+  // Deep audience analysis: everything the project knows + live web research →
+  // { audience: {summary, primary, segments, targeting, avoid}, webSearch }.
+  // A LONG call — several minutes when web search digs in.
+  function audience(opts) {
+    return fetch('/api/ai/audience', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ads-Hub': '1' },
+      body: JSON.stringify({ context: opts.context, brand: opts.brand || '' })
+    }).then(function (r) {
+      return r.json().then(function (body) {
+        if (!r.ok) throw new Error(body && body.message ? body.message : ('Audience analysis failed (' + r.status + ')'));
+        return { audience: body.audience, webSearch: !!body.webSearch };
+      });
+    });
+  }
+
   // Art-director image concepts: Claude studies the project + reference images
   // and returns N { label, prompt, why } ideas for ad visuals.
   function imageConcepts(opts) {
@@ -227,5 +242,5 @@ window.Ads = window.Ads || {};
       .then(function (r) { return r.json(); }).catch(function () { return { enabled: true, ok: false, error: 'Could not reach the key checker' }; });
   }
 
-  Ads.ai = { status: status, setKey: setKey, generateCopy: generateCopy, generateDossier: generateDossier, research: research, landingContent: landingContent, imageConcepts: imageConcepts, genImage: genImage, genImages: genImages, genClip: genClip, geminiStatus: geminiStatus, setGeminiKey: setGeminiKey, geminiVerify: geminiVerify, variationToSpec: variationToSpec, scrape: scrape, editSpec: editSpec };
+  Ads.ai = { status: status, setKey: setKey, generateCopy: generateCopy, generateDossier: generateDossier, research: research, audience: audience, landingContent: landingContent, imageConcepts: imageConcepts, genImage: genImage, genImages: genImages, genClip: genClip, geminiStatus: geminiStatus, setGeminiKey: setGeminiKey, geminiVerify: geminiVerify, variationToSpec: variationToSpec, scrape: scrape, editSpec: editSpec };
 })();

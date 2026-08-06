@@ -28,6 +28,7 @@ window.Ads = window.Ads || {};
     imgCount: 6,              // how many relevant images to generate at a time
     genImgBusy: false,        // an image-concept generation is in flight
     animBusy: {},             // genImage id → true while Veo is filming it
+    audienceBusy: false,      // an audience analysis is in flight (project id)
     gemStatus: null,          // cached Nano Banana (Gemini) on/off, so the panel can offer an inline key
     view: 'plain',            // default: just the ad + caption, no device chrome
     platform: 'facebook',
@@ -121,7 +122,7 @@ window.Ads = window.Ads || {};
     gen.results = [];
     gen.selected = {}; gen.liked = {}; gen.disliked = {}; gen.removed = {};
     gen.generating = false; gen.statusMsg = '';
-    gen.researching = false; gen.analyzing = false; gen.genImgBusy = false; gen.animBusy = {};   // a switch must not leave the old project's in-flight flags set (would block the new project's auto-research / image gen)
+    gen.researching = false; gen.analyzing = false; gen.genImgBusy = false; gen.animBusy = {}; gen.audienceBusy = false;   // a switch must not leave the old project's in-flight flags set (would block the new project's auto-research / image gen)
     gen.runSeq++;                       // cancel any in-flight generate/upload work
     gen.copyEngine = p.copyEngine || ''; gen.copyInputs = p.copyInputs || [];
     rememberProject(p.id);
@@ -143,7 +144,7 @@ window.Ads = window.Ads || {};
     gen.brief = { url: '', site: null, text: '', files: [], images: [], videos: [] };
     gen.results = []; gen.selected = {}; gen.liked = {}; gen.disliked = {}; gen.removed = {};
     gen.generating = false; gen.statusMsg = ''; gen.copyEngine = ''; gen.copyInputs = [];
-    gen.researching = false; gen.analyzing = false; gen.genImgBusy = false; gen.animBusy = {};
+    gen.researching = false; gen.analyzing = false; gen.genImgBusy = false; gen.animBusy = {}; gen.audienceBusy = false;
     Ads.go('generator');
   }
   function refreshProjectBar() {
@@ -974,6 +975,171 @@ window.Ads = window.Ads || {};
     }
     pump();
   }
+  /* ---- Analyze best target audience -------------------------------------
+     Assembles EVERYTHING the project knows — dossier, market research, brief
+     text/documents, the website, video transcripts, generated imagery, every
+     saved ad — hands it to the AI with live web search, and renders WHO the
+     ads should target: segments, demographics, regions, platforms + a
+     Meta-ready targeting spec. Persisted on the project.                    */
+  function audienceContext() {
+    var parts = [];
+    var d = currentDossier();
+    if (d && d.sections) {
+      var s = d.sections;
+      var dos = [];
+      if (s.summary) dos.push(s.summary);
+      if (s.product) dos.push('The product: ' + s.product);
+      if (s.audience) dos.push('Audience notes so far: ' + s.audience);
+      if (Array.isArray(s.benefits) && s.benefits.length) dos.push('Benefits: ' + s.benefits.join('; '));
+      if (Array.isArray(s.features) && s.features.length) dos.push('Features: ' + s.features.join('; '));
+      if (Array.isArray(s.proof) && s.proof.length) dos.push('Proof: ' + s.proof.join(' | '));
+      if (Array.isArray(s.objections) && s.objections.length) dos.push('Objections people raise: ' + s.objections.join(' | '));
+      if (s.tone) dos.push('Tone: ' + s.tone);
+      if (Array.isArray(s.keywords) && s.keywords.length) dos.push('Keywords: ' + s.keywords.join(', '));
+      parts.push('== PROJECT UNDERSTANDING (deep-read dossier) ==\n' + dos.join('\n'));
+    }
+    var r = currentResearch();
+    if (r) {
+      var pains = (r.painPoints || []).map(function (x) {
+        return '- ' + (x.pain || '') + (x.who ? ' | felt by: ' + x.who : '') + (x.quote ? ' | in their words: "' + x.quote + '"' : '');
+      }).join('\n');
+      parts.push('== MARKET RESEARCH (real pain points) ==\n' + (r.summary ? r.summary + '\n' : '') + pains);
+    }
+    var site = gen.brief.site;
+    if (site) {
+      parts.push('== THE WEBSITE ==\n' + (site.siteName ? site.siteName + ' — ' : '') + (site.description || '') +
+        (site.text ? '\nSite copy:\n' + String(site.text).slice(0, 6000) : ''));
+    }
+    if (gen.brief.text) parts.push('== ADVERTISER NOTES ==\n' + String(gen.brief.text).slice(0, 2500));
+    var files = (gen.brief.files || []).slice(0, 6).map(function (f) {
+      return '--- ' + (f.name || 'document') + ' ---\n' + String(f.text || '').slice(0, 1500);
+    });
+    if (files.length) parts.push('== DOCUMENTS ==\n' + files.join('\n'));
+    var trans = (gen.brief.videos || []).map(function (v) { return v.transcript; }).filter(Boolean);
+    if (trans.length) parts.push('== VIDEO TRANSCRIPT (what the brand film says) ==\n' + String(trans.join('\n')).slice(0, 2500));
+    var gi = genImagesList().filter(function (g) { return !g.placeholder; });
+    if (gi.length) {
+      parts.push('== AD IMAGERY WE GENERATED (what our visuals portray) ==\n' +
+        gi.slice(0, 25).map(function (g) { return '- ' + (g.label || '') + ': ' + String(g.prompt || '').slice(0, 180); }).join('\n'));
+    }
+    var p = currentProject();
+    var saved = (p && p.savedAds) || [];
+    if (saved.length) {
+      parts.push('== EVERY SAVED AD (the ads that will actually run — match segments to these angles) ==\n' +
+        saved.slice(0, 60).map(function (a2) {
+          return '- [' + (a2.kind === 'video' ? 'video' : 'post') + '] angle: ' + (a2.angle || '—') +
+            ' | headline: ' + (((a2.headlineStart || '') + ' ' + (a2.headlineHighlight || '')).trim() || '—') +
+            (a2.caption ? ' | caption: ' + String(a2.caption).slice(0, 110) : '');
+        }).join('\n'));
+    }
+    return parts.join('\n\n').slice(0, 41000);
+  }
+  function audChips(label, list) {
+    if (!list || !list.length) return '';
+    return '<div class="aud-chiprow"><span class="aud-chiplabel">' + esc(label) + '</span>' +
+      list.map(function (x) { return '<span class="aud-chip">' + esc(x) + '</span>'; }).join('') + '</div>';
+  }
+  function audienceSegCard(s, isPrimary) {
+    return '<div class="aud-card' + (isPrimary ? ' is-primary' : '') + '">' +
+      '<div class="aud-cardhead">' +
+        (isPrimary ? '<span class="aud-star">★ BEST TARGET</span>' : '<span class="aud-pri">#' + s.priority + '</span>') +
+        '<h4>' + esc(s.name || 'Segment') + '</h4>' +
+      '</div>' +
+      '<p class="aud-who">' + esc(s.who || '') + '</p>' +
+      '<div class="aud-facts">' +
+        (s.age ? '<span class="aud-fact"><b>Age</b> ' + esc(s.age) + '</span>' : '') +
+        (s.gender ? '<span class="aud-fact"><b>Gender</b> ' + esc(s.gender) + '</span>' : '') +
+        (s.income ? '<span class="aud-fact"><b>Income</b> ' + esc(s.income) + '</span>' : '') +
+      '</div>' +
+      audChips('Regions', s.regions) +
+      audChips('Platforms', s.platforms) +
+      (s.why ? '<p class="aud-why">' + esc(s.why) + '</p>' : '') +
+      (s.adAngles && s.adAngles.length ? '<div class="aud-angles"><b>Your ads that fit:</b> ' + s.adAngles.map(esc).join(' · ') + '</div>' : '') +
+      (s.evidence ? '<div class="aud-evidence">' + esc(s.evidence) + '</div>' : '') +
+    '</div>';
+  }
+  function audiencePanel() {
+    var p = currentProject();
+    var a = p && p.audience;
+    var busy = gen.audienceBusy && gen.audienceBusy === gen.projectId;
+    var body;
+    if (busy) {
+      body = '<div class="gh-status" id="aud-status"><span class="spinner"></span> Reading everything on the project, then researching the live market — this takes a few minutes…</div>';
+    } else if (a && a.data) {
+      var d = a.data, t = d.targeting || {};
+      body =
+        '<p class="aud-summary">' + esc(d.summary || '') + '</p>' +
+        '<div class="aud-grid">' +
+          (d.primary && d.primary.name ? audienceSegCard(d.primary, true) : '') +
+          (d.segments || []).filter(function (s) { return !d.primary || s.name !== d.primary.name; }).map(function (s) { return audienceSegCard(s, false); }).join('') +
+        '</div>' +
+        '<div class="aud-targeting">' +
+          '<div class="u-label" style="margin-bottom:0.8rem">Ready-to-use targeting (Meta Ads Manager)</div>' +
+          '<div class="aud-facts">' +
+            (t.ageRange ? '<span class="aud-fact"><b>Age</b> ' + esc(t.ageRange) + '</span>' : '') +
+            (t.genders ? '<span class="aud-fact"><b>Gender</b> ' + esc(t.genders) + '</span>' : '') +
+          '</div>' +
+          audChips('Locations', t.locations) +
+          audChips('Interests', t.interests) +
+          audChips('Placements', t.placements) +
+          (t.budgetSplit ? '<p class="aud-why"><b>Budget split:</b> ' + esc(t.budgetSplit) + '</p>' : '') +
+          (t.notes ? '<p class="aud-why">' + esc(t.notes) + '</p>' : '') +
+          (d.avoid ? '<p class="aud-avoid"><b>Don’t spend on:</b> ' + esc(d.avoid) + '</p>' : '') +
+        '</div>' +
+        '<div class="dos-foot"><span class="u-faint">Analyzed ' + esc(String(a.at || '').slice(0, 10)) + (a.webSearch ? ' · grounded in live web research' : ' · model knowledge (no web search)') + '</span>' +
+          '<button class="btn is-ghost is-sm" id="aud-go">Re-analyze</button></div>';
+    } else {
+      body =
+        '<div class="dos-state is-empty">The AI reads <strong>everything</strong> — your project understanding, market research, website, documents, video transcript, generated imagery and every saved ad — then researches the live market to tell you exactly <strong>who to advertise to</strong>: age, gender, regions and platforms, with ready-to-use Meta targeting.</div>' +
+        '<div class="gi-bar" style="margin-top:1.2rem"><div class="toolbar-spacer"></div>' +
+          '<button class="btn is-sm is-primary" id="aud-go"><span class="btn-ico">' + icons().sparkle + '</span> Analyze best target audience</button></div>' +
+        '<div class="gh-status" id="aud-status"></div>';
+    }
+    return '<section class="gen-dossier gen-audience" id="gen-audience">' +
+      '<div class="dos-head"><h3>Analyze best target audience</h3>' +
+        '<span class="u-label">' + ((a && a.data) ? 'who to put these ads in front of' : 'the step before you spend a dollar') + '</span></div>' +
+      body + '</section>';
+  }
+  function refreshAudiencePanel() {
+    var elp = viewEl && viewEl.querySelector('#gen-audience');
+    if (!elp) return;
+    var tmp = document.createElement('div'); tmp.innerHTML = audiencePanel();
+    elp.replaceWith(tmp.firstChild);
+    bindAudience(viewEl);
+  }
+  function bindAudience(el) {
+    var go = el.querySelector('#aud-go');
+    if (go) go.addEventListener('click', runAudience);
+  }
+  function runAudience() {
+    if (!Ads._aiEnabled) { Ads.toast('Turn AI on (top-right) so it can analyze the project', true); return; }
+    if (gen.audienceBusy) { Ads.toast('The analysis is already running', true); return; }
+    var p = ensureProject(), pid = p.id;
+    var ctx = audienceContext();
+    if (ctx.length < 400) { Ads.toast('Not enough material yet — add a website, notes or run the dossier first', true); return; }
+    gen.audienceBusy = pid; refreshAudiencePanel();
+    // NOTE: no runSeq guard here — this call runs for MINUTES and the user may
+    // legitimately generate ads/images while waiting. The flag always clears,
+    // the pid-keyed result always persists; only the UI refresh checks whether
+    // this project is still on screen. (Same pattern as runResearch.)
+    ai.audience({ context: ctx, brand: (gen.brief.site && gen.brief.site.siteName) || store.getBrand().name })
+      .then(function (resp) {
+        if (gen.audienceBusy === pid) gen.audienceBusy = false;
+        store.updateProject(pid, { audience: { at: util.nowISO(), webSearch: resp.webSearch, data: resp.audience } });
+        if (gen.projectId === pid) {
+          refreshAudiencePanel();
+          Ads.toast('Audience analysis ready — your best target is “' + ((resp.audience.primary && resp.audience.primary.name) || 'see below') + '”');
+        }
+      })
+      .catch(function (e) {
+        if (gen.audienceBusy === pid) gen.audienceBusy = false;
+        if (gen.projectId === pid) {
+          refreshAudiencePanel();
+          Ads.toast('Audience analysis failed: ' + (e && e.message || 'unknown'), true);
+        }
+      });
+  }
+
   // selected pain points → copy variations for the no-AI fallback path
   function researchFallbackCopies(list) {
     var dom = briefLib.domain(gen.brief);
@@ -2935,11 +3101,12 @@ window.Ads = window.Ads || {};
       var last = lastProjectId();
       if (!gen.projectId && last && store.getProject(last)) { openProject(last); return; }
     }
-    el.innerHTML = briefPanel() + dossierPanel() + researchPanel() + imagesPanel() + resultsSection() + savedSection();
+    el.innerHTML = briefPanel() + dossierPanel() + researchPanel() + imagesPanel() + audiencePanel() + resultsSection() + savedSection();
     bindBrief(el);
     bindDossier(el);
     bindResearch(el);
     bindImages(el);
+    bindAudience(el);
     bindResults(el);
     bindSaved(el);
     syncGemStatus();   // fills in the inline Nano Banana key row once status is known

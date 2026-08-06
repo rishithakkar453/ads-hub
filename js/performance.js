@@ -690,4 +690,174 @@ window.Ads = window.Ads || {};
   }
 
   function empty(el, title, sub) { el.innerHTML = '<div class="empty"><div class="empty-title">' + esc(title) + '</div><div>' + esc(sub) + '</div><div class="btn-row" style="justify-content:center;margin-top:1.6rem"><button class="btn" data-action="nav" data-view="generator">Open generator</button></div></div>'; }
+  /* ===================== CAMPAIGN ROUNDS ================================= */
+  // A folder per project; a round = the named batch of saved ads you post
+  // together. Every ad gets platform-tagged tracked links (?s=ig/fb/tt/x) —
+  // the collector already splits clicks, visits and time by that tag, so the
+  // round view shows exactly where each visitor came from.
+  var ROUND_PLATFORMS = [
+    { id: 'ig', label: 'Instagram' }, { id: 'fb', label: 'Facebook' },
+    { id: 'tt', label: 'TikTok' }, { id: 'x', label: 'X' }
+  ];
+  function projRounds(p) { return Array.isArray(p.rounds) ? p.rounds : []; }
+  function savedByKey(p) { var m = {}; (p.savedAds || []).forEach(function (a) { if (a.adKey) m[a.adKey] = a; }); return m; }
+  function landingKeys(p) {
+    // only PUBLISHED landings count: an unpublished record means the /a/<key>
+    // link was never registered with the collector and would 404 untracked
+    var m = {};
+    (p.landings || []).forEach(function (l) {
+      if (!l.tracked) return;
+      (l.adKeys || (l.adKey ? [l.adKey] : [])).forEach(function (k) { m[k] = l; });
+    });
+    return m;
+  }
+  function snapAds() { var t = store.getTracking(); return (t.snapshot && t.snapshot.ads) || {}; }
+
+  Ads.registerView('rounds', {
+    title: 'Campaign Rounds', mode: 'performance',
+    render: function (el) {
+      var projects = store.listProjects();
+      if (!projects.length) return empty(el, 'No projects yet', 'Create a project in the generator first.');
+      el.innerHTML =
+        '<div class="view-section"><p class="u-muted">One folder per project. Group the saved ads you’re posting into <strong>rounds</strong>, copy each ad’s <strong>platform link</strong> when you post it, and every click, landing visit and time-on-page reports back split by platform.</p></div>' +
+        projects.map(function (p) {
+          var rounds = projRounds(p);
+          var rows = rounds.map(function (r) {
+            return '<div class="lp-row">' +
+              '<div style="flex:1;min-width:0"><strong>' + esc(r.name) + '</strong>' +
+                '<div class="u-faint" style="font-size:1.1rem">' + r.adKeys.length + ' ad' + (r.adKeys.length === 1 ? '' : 's') + ' · created ' + esc(String(r.createdAt || '').slice(0, 10)) + '</div></div>' +
+              '<button class="btn is-sm" data-round-open="' + esc(p.id + ':' + r.id) + '">Open</button>' +
+              '<button class="icon-btn" data-round-del="' + esc(p.id + ':' + r.id) + '" title="Delete round">' + icons().trash + '</button>' +
+            '</div>';
+          }).join('');
+          return '<div class="view-section"><div class="section-head"><h2>📁 ' + esc(p.name || 'Project') + '</h2>' +
+            '<span class="section-action"><span class="u-label">' + (p.savedAds || []).length + ' saved ads</span>' +
+            '<button class="btn is-sm" data-round-new="' + esc(p.id) + '">+ New round</button></span></div>' +
+            (rows || '<div class="dos-state is-empty">No rounds yet — make one and pick the ads you’re posting.</div>') +
+          '</div>';
+        }).join('');
+      el.querySelectorAll('[data-round-new]').forEach(function (b) {
+        b.addEventListener('click', function () { roundEditor(b.getAttribute('data-round-new'), null); });
+      });
+      el.querySelectorAll('[data-round-open]').forEach(function (b) {
+        b.addEventListener('click', function () { var pr = b.getAttribute('data-round-open').split(':'); roundDetail(pr[0], pr[1]); });
+      });
+      el.querySelectorAll('[data-round-del]').forEach(function (b) {
+        b.addEventListener('click', function () {
+          var pr = b.getAttribute('data-round-del').split(':');
+          Ads.confirm({
+            title: 'Delete this round?', message: 'The ads and their tracking data stay — only the grouping is removed.',
+            danger: true, okLabel: 'Delete',
+            onConfirm: function () {
+              var p = store.getProject(pr[0]); if (!p) return;
+              store.updateProject(p.id, { rounds: projRounds(p).filter(function (r) { return r.id !== pr[1]; }) });
+              Ads.go('rounds');
+            }
+          });
+        });
+      });
+    }
+  });
+
+  function roundEditor(pid, roundId) {
+    var p = store.getProject(pid); if (!p) return;
+    var existing = roundId ? projRounds(p).filter(function (r) { return r.id === roundId; })[0] : null;
+    var savedAll = p.savedAds || [];
+    // only ads WITH a tracking key can join a round (keys are assigned when
+    // landing pages are generated) — keyless ads would be silently dropped
+    var saved = savedAll.filter(function (a) { return a.adKey; });
+    if (!savedAll.length) { Ads.toast('This project has no saved ads yet — ❤ some ads first', true); return; }
+    if (!saved.length) { Ads.toast('These saved ads have no tracking keys yet — open Landing pages once first', true); return; }
+    var keyless = savedAll.length - saved.length;
+    var sel = {}; (existing ? existing.adKeys : []).forEach(function (k) { sel[k] = 1; });
+    var lk = landingKeys(p);
+    var list = saved.map(function (a, i) {
+      var key = a.adKey;
+      return '<label class="rnd-pick"><input type="checkbox" data-rk="' + esc(key) + '"' + (sel[key] ? ' checked' : '') + '>' +
+        '<span class="rnd-pickname"><strong>' + esc(a.name || a.angle || ('Ad ' + (i + 1))) + '</strong>' +
+        '<span class="u-faint"> · ' + (a.kind === 'video' ? 'video' : 'post') + (lk[key] ? ' · has landing page' : ' · ⚠ no landing page yet') + '</span></span></label>';
+    }).join('');
+    Ads.modal({
+      title: existing ? 'Edit round' : 'New round — pick the ads you’re posting', wide: true,
+      body: '<div class="field"><label>Round name</label><input class="input" id="rnd-name" value="' + esc(existing ? existing.name : ('Round ' + (projRounds(p).length + 1))) + '"></div>' +
+        '<div class="u-label" style="margin:1rem 0 0.6rem">Saved ads (' + saved.length + ')' + (keyless ? ' — ' + keyless + ' hidden (no tracking key yet; open Landing pages once)' : '') + '</div>' +
+        '<div class="rnd-list">' + list + '</div>' +
+        '<div class="hint" style="margin-top:1rem">⚠ An ad’s tracked link only goes live when its landing page is generated — that’s what registers the link with the collector. Generate landing pages before posting.</div>',
+      foot: [{ label: 'Cancel', act: 'cancel', ghost: true }, { label: existing ? 'Save round' : 'Create round', act: 'save', primary: true }],
+      onAction: function (act, m) {
+        if (act === 'cancel') return Ads.closeModal();
+        if (act !== 'save') return;
+        var keys = [].map.call(m.querySelectorAll('[data-rk]'), function (c) { return c.checked ? c.getAttribute('data-rk') : null; }).filter(Boolean);
+        if (!keys.length) { Ads.toast('Pick at least one ad', true); return; }
+        var name = (m.querySelector('#rnd-name').value || '').trim() || 'Round';
+        var p2 = store.getProject(pid); if (!p2) return;
+        var rounds = projRounds(p2).slice();
+        var openId;
+        if (existing) { rounds = rounds.map(function (r) { return r.id === existing.id ? Object.assign({}, r, { name: name, adKeys: keys }) : r; }); openId = existing.id; }
+        else { var nr = { id: util.uid('rd'), name: name, adKeys: keys, createdAt: util.nowISO() }; rounds.push(nr); openId = nr.id; }
+        store.updateProject(pid, { rounds: rounds });
+        Ads.closeModal(); Ads.go('rounds');
+        roundDetail(pid, openId);
+      }
+    });
+  }
+
+  function roundDetail(pid, roundId) {
+    var p = store.getProject(pid); if (!p) return;
+    var r = projRounds(p).filter(function (x) { return x.id === roundId; })[0]; if (!r) return;
+    var byKey = savedByKey(p), lk = landingKeys(p), snap = snapAds();
+    var base = trackBase();
+    var tot = { clicks: 0, views: 0, outs: 0 };
+    var rows = r.adKeys.map(function (k) {
+      var a = byKey[k]; var st = snap[k] || {};
+      tot.clicks += st.clicks || 0; tot.views += st.views || 0; tot.outs += st.outs || 0;
+      var link = base + '/a/' + k;
+      var plats = ROUND_PLATFORMS.map(function (pl) {
+        return '<button class="btn is-ghost is-xs" data-copy="' + esc(link + '?s=' + pl.id) + '" title="Copy the link to use when posting on ' + pl.label + '">' + pl.label + '</button>';
+      }).join('');
+      return '<div class="rnd-adrow">' +
+        '<div class="rnd-adhead"><strong>' + esc(a ? (a.name || a.angle || k) : (k + ' (no longer saved)')) + '</strong>' +
+          (a ? '<span class="u-faint"> · ' + (a.kind === 'video' ? 'video' : 'post') + '</span>' : '') +
+          (lk[k] ? '' : ' <span class="tag">no landing page</span>') + '</div>' +
+        '<div class="rnd-links"><span class="u-label" style="margin-right:0.6rem">Copy link for:</span>' + plats +
+          '<button class="btn is-ghost is-xs" data-copy="' + esc(link) + '">Plain</button></div>' +
+        '<div class="rnd-stats">' +
+          '<span><b>' + (st.clicks || 0) + '</b> clicks</span><span><b>' + (st.views || 0) + '</b> visits</span>' +
+          '<span><b>' + fmtDur(st.avgSeconds || 0) + '</b> avg time</span><span><b>' + (st.outs || 0) + '</b> to site</span>' +
+          '<span class="rnd-src">' + srcChips(st.bySrc) + '</span>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+    Ads.modal({
+      title: (p.name || 'Project') + ' — ' + r.name, xwide: true,
+      body: '<p class="u-muted">Post each ad using its <strong>platform link</strong> as the destination — Instagram posts get the Instagram link, and so on. Every click, landing visit, time-on-page and click-through to the site then reports <strong>per platform</strong>.</p>' +
+        '<div class="btn-row" style="margin:1.2rem 0">' +
+          '<button class="btn is-ghost is-sm" id="rnd-sync">↻ Sync live stats</button>' +
+          '<button class="btn is-ghost is-sm" id="rnd-edit">Edit ads in round</button>' +
+          '<span class="u-faint" style="margin-left:auto">Round total: <b>' + tot.clicks + '</b> clicks · <b>' + tot.views + '</b> visits · <b>' + tot.outs + '</b> to site</span>' +
+        '</div>' + rows,
+      foot: [{ label: 'Close', act: 'cancel', ghost: true }],
+      onMount: function (m) {
+        m.querySelectorAll('[data-copy]').forEach(function (b) {
+          b.addEventListener('click', function () {
+            try { navigator.clipboard.writeText(b.getAttribute('data-copy')); Ads.toast('Link copied — use it as the ad’s destination URL'); }
+            catch (e) { Ads.toast('Could not copy', true); }
+          });
+        });
+        var sync = m.querySelector('#rnd-sync');
+        if (sync) sync.addEventListener('click', function () {
+          sync.disabled = true; sync.innerHTML = '<span class="spinner"></span> Syncing…';
+          syncTracking(function (err) {
+            Ads.closeModal();
+            if (err) Ads.toast('Sync failed: ' + err.message, true);
+            roundDetail(pid, roundId);
+          });
+        });
+        var ed = m.querySelector('#rnd-edit');
+        if (ed) ed.addEventListener('click', function () { Ads.closeModal(); roundEditor(pid, roundId); });
+      },
+      onAction: function (act) { if (act === 'cancel') Ads.closeModal(); }
+    });
+  }
+
 })();
