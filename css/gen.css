@@ -255,6 +255,12 @@ input[type="range"]::-moz-range-thumb {
 .rnd-pick:hover { background: rgba(255,255,255,0.04); }
 .rnd-pick input { width: 1.6rem; height: 1.6rem; accent-color: var(--accent, #ff7a3c); }
 .rnd-pickname { min-width: 0; }
+.rnd-grid { grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); max-height: 58vh; overflow-y: auto; padding: 0.4rem; }
+.rnd-card { display: flex; flex-direction: column; background: rgba(255,255,255,0.02); }
+.rnd-thumb { width: 100%; min-height: 12rem; display: flex; align-items: center; justify-content: center; overflow: hidden; background: #0c0c0f; pointer-events: none; }
+.rnd-thumb > * { max-width: 100%; }
+.rnd-cap { padding: 0.6rem 0.9rem 0.8rem; font-size: 1.12rem; display: flex; flex-direction: column; gap: 0.2rem; pointer-events: none; }
+.rnd-cap span { color: var(--faint); font-size: 1rem; }
 .rnd-adrow { border: 1px solid var(--line); border-radius: 1rem; padding: 1.2rem 1.4rem; margin-bottom: 1rem; }
 .rnd-adhead { font-size: 1.3rem; margin-bottom: 0.8rem; }
 .rnd-links { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.9rem; }

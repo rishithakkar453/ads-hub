@@ -771,23 +771,42 @@ window.Ads = window.Ads || {};
     var keyless = savedAll.length - saved.length;
     var sel = {}; (existing ? existing.adKeys : []).forEach(function (k) { sel[k] = 1; });
     var lk = landingKeys(p);
+    // every ad rendered IN FULL — click to include, same as the frame picker
     var list = saved.map(function (a, i) {
       var key = a.adKey;
-      return '<label class="rnd-pick"><input type="checkbox" data-rk="' + esc(key) + '"' + (sel[key] ? ' checked' : '') + '>' +
-        '<span class="rnd-pickname"><strong>' + esc(a.name || a.angle || ('Ad ' + (i + 1))) + '</strong>' +
-        '<span class="u-faint"> · ' + (a.kind === 'video' ? 'video' : 'post') + (lk[key] ? ' · has landing page' : ' · ⚠ no landing page yet') + '</span></span></label>';
+      return '<div class="fp-item rnd-card' + (sel[key] ? ' is-on' : '') + '" data-rk="' + esc(key) + '">' +
+        '<div class="rnd-thumb" data-rt="' + esc(key) + '"></div>' +
+        '<span class="fp-tick">✓</span>' +
+        '<div class="rnd-cap"><strong>' + esc(a.angle || a.name || ('Ad ' + (i + 1))) + '</strong>' +
+          '<span>' + (a.kind === 'video' ? '▶ video' : 'post') + (lk[key] ? '' : ' · ⚠ no landing page') + '</span></div>' +
+      '</div>';
     }).join('');
     Ads.modal({
-      title: existing ? 'Edit round' : 'New round — pick the ads you’re posting', wide: true,
+      title: existing ? 'Edit round' : 'New round — pick the ads you’re posting', xwide: true,
       body: '<div class="field"><label>Round name</label><input class="input" id="rnd-name" value="' + esc(existing ? existing.name : ('Round ' + (projRounds(p).length + 1))) + '"></div>' +
-        '<div class="u-label" style="margin:1rem 0 0.6rem">Saved ads (' + saved.length + ')' + (keyless ? ' — ' + keyless + ' hidden (no tracking key yet; open Landing pages once)' : '') + '</div>' +
-        '<div class="rnd-list">' + list + '</div>' +
+        '<div class="u-label" style="margin:1rem 0 0.6rem"><span id="rnd-count"></span>' + (keyless ? ' — ' + keyless + ' hidden (no tracking key yet; open Landing pages once)' : '') + '</div>' +
+        '<div class="fp-grid rnd-grid">' + list + '</div>' +
         '<div class="hint" style="margin-top:1rem">⚠ An ad’s tracked link only goes live when its landing page is generated — that’s what registers the link with the collector. Generate landing pages before posting.</div>',
       foot: [{ label: 'Cancel', act: 'cancel', ghost: true }, { label: existing ? 'Save round' : 'Create round', act: 'save', primary: true }],
+      onMount: function (m) {
+        var byK = {}; saved.forEach(function (a) { byK[a.adKey] = a; });
+        function upd() {
+          var n = m.querySelectorAll('.rnd-card.is-on').length;
+          var c = m.querySelector('#rnd-count'); if (c) c.textContent = n + ' of ' + saved.length + ' ads in this round';
+        }
+        m.querySelectorAll('.rnd-card').forEach(function (it) {
+          it.addEventListener('click', function () { it.classList.toggle('is-on'); upd(); });
+        });
+        m.querySelectorAll('[data-rt]').forEach(function (n) {
+          var a = byK[n.getAttribute('data-rt')]; if (!a) return;
+          try { thumbFor(n, a, n.clientWidth || 180, null); } catch (e) {}
+        });
+        upd();
+      },
       onAction: function (act, m) {
         if (act === 'cancel') return Ads.closeModal();
         if (act !== 'save') return;
-        var keys = [].map.call(m.querySelectorAll('[data-rk]'), function (c) { return c.checked ? c.getAttribute('data-rk') : null; }).filter(Boolean);
+        var keys = [].map.call(m.querySelectorAll('.rnd-card.is-on'), function (c) { return c.getAttribute('data-rk'); }).filter(Boolean);
         if (!keys.length) { Ads.toast('Pick at least one ad', true); return; }
         var name = (m.querySelector('#rnd-name').value || '').trim() || 'Round';
         var p2 = store.getProject(pid); if (!p2) return;
