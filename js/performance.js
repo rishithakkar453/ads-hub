@@ -713,51 +713,141 @@ window.Ads = window.Ads || {};
   }
   function snapAds() { var t = store.getTracking(); return (t.snapshot && t.snapshot.ads) || {}; }
 
+  var roundsOpenProject = null;   // project id while a folder is open as a page
+
   Ads.registerView('rounds', {
-    title: 'Campaign Rounds', mode: 'performance',
+    title: function () {
+      if (roundsOpenProject) { var p = store.getProject(roundsOpenProject); if (p) return '📁 ' + (p.name || 'Project'); }
+      return 'Campaign Rounds';
+    },
+    mode: 'performance',
     render: function (el) {
+      if (roundsOpenProject) {
+        var open = store.getProject(roundsOpenProject);
+        if (open) return renderFolderPage(el, open);
+        roundsOpenProject = null;
+      }
       var projects = store.listProjects();
       if (!projects.length) return empty(el, 'No projects yet', 'Create a project in the generator first.');
       el.innerHTML =
-        '<div class="view-section"><p class="u-muted">One folder per project. Group the saved ads you’re posting into <strong>rounds</strong>, copy each ad’s <strong>platform link</strong> when you post it, and every click, landing visit and time-on-page reports back split by platform.</p></div>' +
+        '<div class="view-section"><p class="u-muted">One folder per project — open it to see every ad you’re posting and <strong>all its tracking data</strong> in one place. Group ads into <strong>rounds</strong>, post each with its platform link, and everything reports back here.</p></div>' +
         projects.map(function (p) {
           var rounds = projRounds(p);
-          var rows = rounds.map(function (r) {
-            return '<div class="lp-row">' +
-              '<div style="flex:1;min-width:0"><strong>' + esc(r.name) + '</strong>' +
-                '<div class="u-faint" style="font-size:1.1rem">' + r.adKeys.length + ' ad' + (r.adKeys.length === 1 ? '' : 's') + ' · created ' + esc(String(r.createdAt || '').slice(0, 10)) + '</div></div>' +
-              '<button class="btn is-sm" data-round-open="' + esc(p.id + ':' + r.id) + '">Open</button>' +
-              '<button class="icon-btn" data-round-del="' + esc(p.id + ':' + r.id) + '" title="Delete round">' + icons().trash + '</button>' +
-            '</div>';
-          }).join('');
-          return '<div class="view-section"><div class="section-head"><h2>📁 ' + esc(p.name || 'Project') + '</h2>' +
-            '<span class="section-action"><span class="u-label">' + (p.savedAds || []).length + ' saved ads</span>' +
-            '<button class="btn is-sm" data-round-new="' + esc(p.id) + '">+ New round</button></span></div>' +
-            (rows || '<div class="dos-state is-empty">No rounds yet — make one and pick the ads you’re posting.</div>') +
-          '</div>';
+          var adCount = rounds.reduce(function (n, r) { return n + r.adKeys.length; }, 0);
+          return '<div class="view-section"><div class="rndf-card" data-folder="' + esc(p.id) + '">' +
+            '<div class="rndf-info"><h2>📁 ' + esc(p.name || 'Project') + '</h2>' +
+              '<span class="u-faint">' + rounds.length + ' round' + (rounds.length === 1 ? '' : 's') + ' · ' + adCount + ' ad' + (adCount === 1 ? '' : 's') + ' in rounds · ' + (p.savedAds || []).length + ' saved ads</span></div>' +
+            '<button class="btn is-primary is-sm" data-folder-open="' + esc(p.id) + '">Open folder</button>' +
+          '</div></div>';
         }).join('');
-      el.querySelectorAll('[data-round-new]').forEach(function (b) {
-        b.addEventListener('click', function () { roundEditor(b.getAttribute('data-round-new'), null); });
-      });
-      el.querySelectorAll('[data-round-open]').forEach(function (b) {
-        b.addEventListener('click', function () { var pr = b.getAttribute('data-round-open').split(':'); roundDetail(pr[0], pr[1]); });
-      });
-      el.querySelectorAll('[data-round-del]').forEach(function (b) {
-        b.addEventListener('click', function () {
-          var pr = b.getAttribute('data-round-del').split(':');
-          Ads.confirm({
-            title: 'Delete this round?', message: 'The ads and their tracking data stay — only the grouping is removed.',
-            danger: true, okLabel: 'Delete',
-            onConfirm: function () {
-              var p = store.getProject(pr[0]); if (!p) return;
-              store.updateProject(p.id, { rounds: projRounds(p).filter(function (r) { return r.id !== pr[1]; }) });
-              Ads.go('rounds');
-            }
-          });
+      el.querySelectorAll('[data-folder-open], .rndf-card').forEach(function (b) {
+        b.addEventListener('click', function (e) {
+          e.stopPropagation();
+          roundsOpenProject = b.getAttribute('data-folder-open') || b.getAttribute('data-folder');
+          Ads.go('rounds');
         });
       });
     }
   });
+
+  // the FOLDER PAGE — the main analytics surface: every ad in every round,
+  // rendered in full, with its complete tracking picture and platform links
+  function renderFolderPage(el, p) {
+    var rounds = projRounds(p), byKey = savedByKey(p), lk = landingKeys(p), snap = snapAds();
+    var t = store.getTracking(), spend = t.spend || {};
+    var base = trackBase();
+    function stat(v, l) { return '<span class="rndp-stat"><b>' + v + '</b><span>' + l + '</span></span>'; }
+    var head = '<div class="view-section"><div class="btn-row">' +
+      '<button class="btn is-ghost is-sm" id="rndf-back">← All folders</button>' +
+      '<button class="btn is-ghost is-sm" id="rndf-sync">↻ Sync live stats</button>' +
+      '<span class="u-faint" style="margin-left:auto">' + (t.syncedAt ? 'synced ' + esc(String(t.syncedAt).slice(0, 16).replace('T', ' ')) : 'stats not synced yet') + '</span>' +
+      '<button class="btn is-sm" id="rndf-new">+ New round</button>' +
+    '</div></div>';
+    var sections = rounds.map(function (r) {
+      var tot = { clicks: 0, views: 0, outs: 0, spend: 0, spendSet: false };
+      var cards = r.adKeys.map(function (k) {
+        var a = byKey[k]; var st = snap[k] || {};
+        tot.clicks += st.clicks || 0; tot.views += st.views || 0; tot.outs += st.outs || 0;
+        var sp = spend[k] != null ? util.num(spend[k]) : null;
+        if (sp != null) { tot.spend += sp; tot.spendSet = true; }
+        var link = base + '/a/' + k;
+        var plats = ROUND_PLATFORMS.map(function (pl) {
+          return '<button class="btn is-ghost is-xs" data-copy="' + esc(link + '?s=' + pl.id) + '" title="Copy the ' + pl.label + ' link">' + pl.label + '</button>';
+        }).join('');
+        var outRate = st.views ? Math.round((st.outs || 0) / st.views * 100) : null;
+        return '<div class="rndp-card">' +
+          '<div class="rndp-thumb" data-rt2="' + esc(k) + '"></div>' +
+          '<div class="rndp-body">' +
+            '<div class="rndp-name"><strong>' + esc(a ? (a.angle || a.name || k) : (k + ' (no longer saved)')) + '</strong>' +
+              '<span class="u-faint"> · ' + (a ? (a.kind === 'video' ? 'video' : 'post') : '?') + (lk[k] ? '' : ' · ⚠ no landing page') + '</span></div>' +
+            '<div class="rnd-links">' + plats + '<button class="btn is-ghost is-xs" data-copy="' + esc(link) + '">Plain</button></div>' +
+            '<div class="rndp-stats">' +
+              stat(st.clicks || 0, 'clicks') + stat(st.views || 0, 'visits') +
+              stat(fmtDur(st.avgSeconds || 0), 'avg time') +
+              stat(st.scrollAvg != null && st.views ? Math.round(st.scrollAvg) + '%' : '—', 'scroll') +
+              stat((st.outs || 0) + (outRate != null ? ' (' + outRate + '%)' : ''), 'to site') +
+            '</div>' +
+            '<div class="rndp-srcrow">' + srcChips(st.bySrc) + '</div>' +
+            '<div class="rndp-spend"><label>Spend ' + esc(sym()) + '</label>' +
+              '<input class="input" data-spend="' + esc(k) + '" value="' + (sp != null ? sp : '') + '" placeholder="0" inputmode="decimal">' +
+              (sp != null && st.clicks ? '<span class="u-faint">' + money(sp / st.clicks) + '/click</span>' : '') +
+              (sp != null && st.outs ? '<span class="u-faint">' + money(sp / st.outs) + '/site visit</span>' : '') +
+            '</div>' +
+          '</div></div>';
+      }).join('');
+      return '<div class="view-section"><div class="section-head"><h2>' + esc(r.name) + '</h2>' +
+        '<span class="section-action"><span class="u-label">' + r.adKeys.length + ' ads · ' + tot.clicks + ' clicks · ' + tot.views + ' visits · ' + tot.outs + ' to site' + (tot.spendSet ? ' · ' + money(tot.spend) + ' spent' : '') + '</span>' +
+        '<button class="btn is-ghost is-sm" data-round-edit="' + esc(r.id) + '">Edit ads</button>' +
+        '<button class="icon-btn" data-round-del2="' + esc(r.id) + '" title="Delete round">' + icons().trash + '</button></span></div>' +
+        '<div class="rndp-grid">' + cards + '</div></div>';
+    }).join('');
+    el.innerHTML = head + (sections || '<div class="view-section"><div class="dos-state is-empty">No rounds yet — press “+ New round” and pick the ads you’re posting.</div></div>');
+    // thumbs
+    el.querySelectorAll('[data-rt2]').forEach(function (n) {
+      var a = byKey[n.getAttribute('data-rt2')]; if (!a) return;
+      try { thumbFor(n, a, n.clientWidth || 150, null); } catch (e) {}
+    });
+    // bindings
+    el.querySelector('#rndf-back').addEventListener('click', function () { roundsOpenProject = null; Ads.go('rounds'); });
+    el.querySelector('#rndf-new').addEventListener('click', function () { roundEditor(p.id, null); });
+    var syncBtn = el.querySelector('#rndf-sync');
+    syncBtn.addEventListener('click', function () {
+      syncBtn.disabled = true; syncBtn.innerHTML = '<span class="spinner"></span> Syncing…';
+      syncTracking(function (err) {
+        if (err) Ads.toast('Sync failed: ' + err.message, true);
+        Ads.go('rounds');
+      });
+    });
+    el.querySelectorAll('[data-copy]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        try { navigator.clipboard.writeText(b.getAttribute('data-copy')); Ads.toast('Link copied — use it as the ad’s destination URL'); }
+        catch (e) { Ads.toast('Could not copy', true); }
+      });
+    });
+    el.querySelectorAll('[data-round-edit]').forEach(function (b) {
+      b.addEventListener('click', function () { roundEditor(p.id, b.getAttribute('data-round-edit')); });
+    });
+    el.querySelectorAll('[data-round-del2]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var rid = b.getAttribute('data-round-del2');
+        Ads.confirm({
+          title: 'Delete this round?', message: 'The ads and their tracking data stay — only the grouping is removed.',
+          danger: true, okLabel: 'Delete',
+          onConfirm: function () {
+            var p2 = store.getProject(p.id); if (!p2) return;
+            store.updateProject(p2.id, { rounds: projRounds(p2).filter(function (r) { return r.id !== rid; }) });
+            Ads.go('rounds');
+          }
+        });
+      });
+    });
+    el.querySelectorAll('[data-spend]').forEach(function (inp) {
+      inp.addEventListener('change', function () {
+        store.setTrackSpend(inp.getAttribute('data-spend'), inp.value.trim());
+        Ads.go('rounds');   // refresh cost-per metrics + round totals
+      });
+    });
+  }
 
   function roundEditor(pid, roundId) {
     var p = store.getProject(pid); if (!p) return;
@@ -815,8 +905,9 @@ window.Ads = window.Ads || {};
         if (existing) { rounds = rounds.map(function (r) { return r.id === existing.id ? Object.assign({}, r, { name: name, adKeys: keys }) : r; }); openId = existing.id; }
         else { var nr = { id: util.uid('rd'), name: name, adKeys: keys, createdAt: util.nowISO() }; rounds.push(nr); openId = nr.id; }
         store.updateProject(pid, { rounds: rounds });
-        Ads.closeModal(); Ads.go('rounds');
-        roundDetail(pid, openId);
+        Ads.closeModal();
+        roundsOpenProject = pid;   // land on the folder page — the main data hub
+        Ads.go('rounds');
       }
     });
   }

@@ -261,6 +261,23 @@ input[type="range"]::-moz-range-thumb {
 .rnd-thumb > * { max-width: 100%; }
 .rnd-cap { padding: 0.6rem 0.9rem 0.8rem; font-size: 1.12rem; display: flex; flex-direction: column; gap: 0.2rem; pointer-events: none; }
 .rnd-cap span { color: var(--faint); font-size: 1rem; }
+.rndf-card { display: flex; align-items: center; gap: 2rem; border: 1px solid var(--line); border-radius: 1.2rem; padding: 1.8rem 2rem; background: rgba(255,255,255,0.02); cursor: pointer; transition: border-color 150ms ease, transform 150ms ease; }
+.rndf-card:hover { border-color: var(--line-strong); transform: translateY(-2px); }
+.rndf-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+.rndp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(44rem, 1fr)); gap: 1.4rem; }
+.rndp-card { display: flex; gap: 1.4rem; border: 1px solid var(--line); border-radius: 1.2rem; padding: 1.4rem; background: rgba(255,255,255,0.02); }
+.rndp-thumb { flex: 0 0 15rem; align-self: flex-start; overflow: hidden; border-radius: 0.8rem; background: #0c0c0f; }
+.rndp-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.9rem; }
+.rndp-name { font-size: 1.3rem; }
+.rndp-stats { display: flex; gap: 1.8rem; flex-wrap: wrap; border-top: 1px dashed var(--line); padding-top: 0.9rem; }
+.rndp-stat { display: flex; flex-direction: column; gap: 0.1rem; }
+.rndp-stat b { font-size: 1.5rem; color: var(--text); }
+.rndp-stat span { font-size: 1rem; color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; }
+.rndp-srcrow { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.rndp-spend { display: flex; align-items: center; gap: 1rem; }
+.rndp-spend label { font-size: 1.05rem; color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; }
+.rndp-spend .input { width: 10rem; }
+@media (max-width: 900px) { .rndp-grid { grid-template-columns: 1fr; } .rndp-card { flex-direction: column; } .rndp-thumb { flex: none; width: 100%; max-width: 22rem; } }
 .rnd-adrow { border: 1px solid var(--line); border-radius: 1rem; padding: 1.2rem 1.4rem; margin-bottom: 1rem; }
 .rnd-adhead { font-size: 1.3rem; margin-bottom: 0.8rem; }
 .rnd-links { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.9rem; }
