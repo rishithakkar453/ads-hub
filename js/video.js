@@ -12,6 +12,15 @@ window.Ads = window.Ads || {};
   'use strict';
   var util = Ads.util;
   var FPS = 30, DURATION = 4.5;
+  // The ad's loop length. Whole-video footage (e.g. an 8s Veo clip) makes the
+  // loop match the FOOTAGE, so the ad never restarts mid-clip — that restart
+  // used to hit at 4.5s, dipping to black halfway through an 8-second clip.
+  // Clip-window and composed ads keep the designed 4.5s rhythm.
+  function loopDur(spec, assets) {
+    var v = assets && assets.video;
+    if (v && !spec.clip && isFinite(v.duration) && v.duration > 0.5) return clamp(v.duration, 3, 12);
+    return DURATION;
+  }
   var PROBE = null; // when set to an array, drawFrame records text-block rects (for layout tests)
 
   /* ---- colour helpers ---------------------------------------------------- */
@@ -202,7 +211,8 @@ window.Ads = window.Ads || {};
     // when the video has actually decoded one (readyState >= HAVE_CURRENT_DATA);
     // poster frames always use the footage still, so a static preview never
     // renders as a blank base fill waiting on an undecoded video
-    if (!poster && assets.video && assets.video.readyState >= 2 && (assets.video.videoWidth || assets.video.width)) {
+    var liveFootage = !!(!poster && assets.video && assets.video.readyState >= 2 && (assets.video.videoWidth || assets.video.width));
+    if (liveFootage) {
       // real uploaded footage — a chosen camera move over the clip. The
       // footage STILL goes down first: drawImage of a video that hasn't
       // presented a frame (mid-seek, stalled, decoder busy) is a silent
@@ -430,11 +440,16 @@ window.Ads = window.Ads || {};
       }
     }
 
-    // ---- intro/outro fade for a soft loop ----
-    var fade = 0;
-    if (t < 0.3) fade = 1 - t / 0.3;
-    else if (t > dur - 0.3) fade = (t - (dur - 0.3)) / 0.3;
-    if (fade > 0) { ctx.fillStyle = 'rgba(6,7,12,' + clamp(fade, 0, 1) + ')'; ctx.fillRect(0, 0, W, H); }
+    // ---- intro/outro fade for a soft loop (composed ads only) ----
+    // Live-footage ads NEVER dip to black: the text must stay up for the whole
+    // clip, and with the loop matched to the footage the restart is the clip's
+    // own natural cut, not a blackout in the middle of it.
+    if (!liveFootage) {
+      var fade = 0;
+      if (t < 0.3) fade = 1 - t / 0.3;
+      else if (t > dur - 0.3) fade = (t - (dur - 0.3)) / 0.3;
+      if (fade > 0) { ctx.fillStyle = 'rgba(6,7,12,' + clamp(fade, 0, 1) + ')'; ctx.fillRect(0, 0, W, H); }
+    }
   }
 
   function drawCover(ctx, img, W, H, scale, ox, oy) {
@@ -563,17 +578,23 @@ window.Ads = window.Ads || {};
       }
       // immediate non-blank frame (footage still / site image) before the live
       // loop starts and before the video has decoded a frame
-      drawFrame(ctx, spec, DURATION * 0.5, d.w, d.h, assets, DURATION, null, true);
-      var start = null;
+      var D = loopDur(spec, assets);
+      ctrl.D = D;
+      drawFrame(ctx, spec, D * 0.5, d.w, d.h, assets, D, null, true);
+      var start = null, lastT = 0;
       function step(ts) {
         if (ctrl.stopped) return;
         // the slot was re-rendered / the modal closed without stop() — kill the
         // loop and its decoder instead of animating a detached canvas forever
         if (!canvas.isConnected) return ctrl.stop();
         if (start == null) start = ts;
-        var t = ((ts - start) / 1000) % DURATION;
+        var t = ((ts - start) / 1000) % D;
+        // phase-lock whole-video footage: when the ad loop wraps, send the clip
+        // back to its first frame so text and footage restart TOGETHER
+        if (t < lastT && assets.video && !spec.clip) { try { assets.video.currentTime = 0; } catch (e) {} }
+        lastT = t;
         kickPlay(assets.video);   // self-heal: power-saving / interrupted play()
-        drawFrame(ctx, spec, t, d.w, d.h, assets, DURATION);
+        drawFrame(ctx, spec, t, d.w, d.h, assets, D);
         ctrl.raf = requestAnimationFrame(step);
       }
       ctrl.raf = requestAnimationFrame(step);
@@ -582,7 +603,8 @@ window.Ads = window.Ads || {};
     ctrl.stop = function () { ctrl.stopped = true; if (ctrl.raf) cancelAnimationFrame(ctrl.raf); pauseVid(); };
     ctrl.poster = function () {
       ctrl.stopped = true; if (ctrl.raf) cancelAnimationFrame(ctrl.raf); pauseVid();
-      if (ctrl.assets) drawFrame(ctx, spec, DURATION * 0.62, d.w, d.h, ctrl.assets, DURATION, null, true);
+      var pd = ctrl.D || DURATION;
+      if (ctrl.assets) drawFrame(ctx, spec, pd * 0.62, d.w, d.h, ctrl.assets, pd, null, true);
     };
     return ctrl;
   }
@@ -609,7 +631,9 @@ window.Ads = window.Ads || {};
         var canvas = document.createElement('canvas');
         canvas.width = d.w; canvas.height = d.h;
         var ctx = canvas.getContext('2d');
-        drawFrame(ctx, spec, 0, d.w, d.h, assets, DURATION); // prime first frame
+        var D = loopDur(spec, assets);   // an 8s Veo ad exports as a full 8s video
+        try { if (assets.video && !spec.clip) assets.video.currentTime = 0; } catch (e) {}
+        drawFrame(ctx, spec, 0, d.w, d.h, assets, D); // prime first frame
         var manualStream = null, track = null, manual = false;
         try { manualStream = canvas.captureStream(0); track = manualStream.getVideoTracks()[0]; manual = track && typeof track.requestFrame === 'function'; } catch (e) {}
         var stream = manual ? manualStream : canvas.captureStream(FPS);
@@ -625,10 +649,10 @@ window.Ads = window.Ads || {};
           resolve({ blob: new Blob(chunks, { type: mime.split(';')[0] }), ext: ext, mime: mime });
         };
         rec.start();
-        var frames = Math.round(DURATION * FPS), i = 0;
+        var frames = Math.round(D * FPS), i = 0;
         var timer = setInterval(function () {
           kickPlay(assets.video);   // an export must never record a frozen clip
-          drawFrame(ctx, spec, i / FPS, d.w, d.h, assets, DURATION);
+          drawFrame(ctx, spec, i / FPS, d.w, d.h, assets, D);
           if (manual && track) { try { track.requestFrame(); } catch (e) {} }
           i++;
           if (i > frames) { clearInterval(timer); setTimeout(function () { try { rec.stop(); } catch (e) { releaseVideo(assets.video); reject(e); } }, 140); }
@@ -651,6 +675,8 @@ window.Ads = window.Ads || {};
   Ads.video = {
     FPS: FPS, DURATION: DURATION, dims: dims, motionOf: motionOf,
     mount: mount, exportVideo: exportVideo, posterBlob: posterBlob, supported: supported,
+    // testing hooks: single-frame draw + the per-footage loop length
+    _drawFrame: drawFrame, _loopDur: loopDur,
     // testing hook: layout(spec[,t]) returns the measured text-block rects for one frame
     layout: function (spec, t) {
       var d = dims(spec);
