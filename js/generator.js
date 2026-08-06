@@ -2905,7 +2905,17 @@ window.Ads = window.Ads || {};
         else if (act === 'edit') {
           if (lbCtrl) lbCtrl.stop();
           Ads.closeModal();
-          editModal(s, { title: 'Edit ad', onSave: function (updated) { if (idx != null && gen.results[idx]) { gen.results[idx] = updated; refreshResults(); } } });
+          editModal(s, { title: 'Edit ad', onSave: function (updated) {
+            if (idx != null && gen.results[idx]) { gen.results[idx] = updated; refreshResults(); return; }
+            // a SAVED ad opened via double-click: persist by savedId — this path
+            // used to silently drop the edit (incl. applied clips) on the floor
+            if (updated.savedId) {
+              var p = currentProject(); if (!p) return;
+              var found = false;
+              var next = (p.savedAds || []).map(function (a) { if (a.savedId === updated.savedId) { found = true; return updated; } return a; });
+              if (found) { store.updateProject(p.id, { savedAds: next }); refreshSaved(); Ads.toast('Saved ad updated'); }
+            }
+          } });
         }
       },
       onMount: function (m) {
