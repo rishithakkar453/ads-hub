@@ -393,9 +393,24 @@ window.Ads = window.Ads || {};
       home: origin + '/', product: origin + '/product', people: origin + '/people',
       partners: origin + '/partners', press: origin + '/press',
       login: 'https://app.cumulus.world/login', signup: 'https://app.cumulus.world/sign-up',
-      learn: origin + '/'
+      learn: origin + '/',
+      // the site's real contact route + footer destinations (verified live)
+      contact: 'mailto:support@cumulus.world?subject=Hello',
+      linkedin: 'https://www.linkedin.com/company/cumulus-world/',
+      instagram: 'https://www.instagram.com/cumulusworld/',
+      privacy: origin + '/privacy-policy'
     };
   }
+  // the site's own CDN assets — real ABC Oracle faces, logo and sky backdrops,
+  // so a landing page is pixel-true to cumulus.world
+  var CUMULUS_CDN = 'https://cdn.prod.website-files.com/66fee0d00c7eda6bbe6a4c91/';
+  var CUMULUS_ASSETS = {
+    fontRegular: CUMULUS_CDN + '66fee0d00c7eda6bbe6a4c9b_ABCOracle-Regular.woff2',
+    fontMedium: CUMULUS_CDN + '66fee0d00c7eda6bbe6a4c9a_ABCOracle-Medium.woff2',
+    logoWhite: CUMULUS_CDN + '66fee0d00c7eda6bbe6a4c9c_cumulus-logo-white.svg',
+    bgSky: CUMULUS_CDN + '66fee0d00c7eda6bbe6a4cae_bg-blue-white.svg',
+    bgDark: CUMULUS_CDN + '66fee0d00c7eda6bbe6a4ca2_bg-green-grey.svg'
+  };
   // the ONE hero photo: the ad's own visual (data-URI), else a site photo, else
   // the composed creative — grayscaled to the archival look by CSS. Placeholder
   // swatches (no real image model yet) are skipped so a published page never
@@ -408,115 +423,174 @@ window.Ads = window.Ads || {};
   }
   // frozen design tokens — verbatim from the supplied 1B template
   function cumulusCSS() {
-    return ':root{--sky-100:#E3FBFF;--sky-300:#9AE1ED;--sky-500:#3FA9D1;--sky-600:#2C89AF;--sky-700:#216A88;--ink-950:#0D0E10;--gray-200:#E4E6E9;--gray-500:#8A8D93;--white:#FFFFFF;--accent:var(--sky-500);--accent-soft:var(--sky-100);--text-strong:var(--ink-950);--text-body:#26282C;--text-muted:var(--gray-500);--link:var(--sky-600);--link-hover:var(--sky-700);--border-subtle:var(--gray-200);--border-card:rgba(13,14,16,.07);--radius-lg:20px;--radius-md:16px;--radius-pill:999px;--shadow-card:0 12px 40px rgba(13,14,16,.10);--font:\'Hanken Grotesk\',ui-sans-serif,system-ui,-apple-system,\'Segoe UI\',Roboto,sans-serif;--ls-tight:-0.02em;--ls-wide:0.08em;--lh-body:1.55;--gradient-sky:radial-gradient(120% 90% at 50% 118%,rgba(154,225,237,.62) 0%,#E3FBFF 48%,rgba(227,251,255,0) 100%),#FFFFFF}' +
-      '*{box-sizing:border-box}' +
-      'body{margin:0;background:var(--gradient-sky);min-height:100vh;font-family:var(--font);color:var(--text-body);-webkit-font-smoothing:antialiased}' +
-      '.page{max-width:1120px;margin:0 auto;background:transparent}' +
-      '.nav{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:22px 40px}' +
-      '.nav-logo{height:26px;width:auto;color:var(--ink-950);display:block}' +
-      '.nav-links{display:flex;align-items:center;gap:28px}' +
-      '.nav-links a{color:var(--text-strong);font-weight:500;font-size:15px;text-decoration:none;opacity:.82}' +
+    return '@font-face{font-family:\'ABC Oracle\';src:url("' + CUMULUS_ASSETS.fontRegular + '") format("woff2");font-weight:400;font-style:normal;font-display:swap}' +
+      '@font-face{font-family:\'ABC Oracle\';src:url("' + CUMULUS_ASSETS.fontMedium + '") format("woff2");font-weight:500;font-style:normal;font-display:swap}' +
+      ':root{--sky-100:#E3FBFF;--sky-300:#9AE1ED;--sky-500:#3FA9D1;--sky-600:#2C89AF;--sky-700:#216A88;--ink:#0D0E10;--body:#26282C;' +
+      '--bg-sky:url("' + CUMULUS_ASSETS.bgSky + '");--bg-dark:url("' + CUMULUS_ASSETS.bgDark + '");' +
+      '--radius-lg:20px;--shadow:0 12px 40px rgba(13,14,16,.10)}' +
+      '*{box-sizing:border-box;margin:0;padding:0}' +
+      'html{scroll-behavior:smooth}' +
+      'body{font-family:\'ABC Oracle\',-apple-system,\'Segoe UI\',Helvetica,Arial,sans-serif;font-weight:400;color:var(--body);background:#fff;-webkit-font-smoothing:antialiased;line-height:1.45}' +
+      'a{text-decoration:none;color:inherit}' +
+      'img{display:block;max-width:100%}' +
+      '.shell{max-width:1160px;margin:0 auto;padding:0 40px}' +
+      '.skyband{background-image:var(--bg-sky);background-size:cover;background-position:top center;background-repeat:no-repeat}' +
+      '.nav{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:24px 0}' +
+      '.nav-logo{height:24px;width:auto;filter:invert(1) brightness(0.1)}' +
+      '.nav-links{display:flex;align-items:center;gap:30px}' +
+      '.nav-links a{font-size:16px;font-weight:500;letter-spacing:-.01em;color:var(--ink);opacity:.85}' +
       '.nav-links a:hover{opacity:1}' +
       '.nav-cta{display:flex;align-items:center;gap:10px}' +
-      '.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;font-family:var(--font);font-weight:600;line-height:1;letter-spacing:-.005em;border-radius:var(--radius-pill);border:1px solid transparent;cursor:pointer;text-decoration:none;padding:9px 18px;font-size:14px;transition:filter .12s ease,transform .12s ease}' +
-      '.btn:active{transform:scale(.97)}' +
-      '.btn-ghost{background:transparent;color:var(--text-strong)}' +
-      '.btn-ghost:hover{background:rgba(13,14,16,.05)}' +
-      '.btn-primary{background:var(--accent);color:#fff}' +
-      '.btn-primary:hover{filter:brightness(.94)}' +
-      '.hero{display:grid;grid-template-columns:1fr 1fr;gap:44px;align-items:center;padding:36px 40px 52px}' +
-      '.eyebrow{font-size:13px;font-weight:600;letter-spacing:var(--ls-wide);text-transform:uppercase;color:var(--sky-600);margin:0 0 18px}' +
-      '.headline{font-size:48px;line-height:1.05;font-weight:700;letter-spacing:var(--ls-tight);color:var(--text-strong);margin:0 0 18px;text-wrap:balance}' +
-      '.subhead{font-size:19px;font-weight:500;line-height:1.25;color:var(--text-body);margin:0}' +
-      '.hero-media{position:relative;aspect-ratio:5/4;border-radius:var(--radius-lg);overflow:hidden;box-shadow:var(--shadow-card)}' +
-      '.hero-media img{width:100%;height:100%;object-fit:cover;display:block;filter:grayscale(1)}' +
-      '.hero-image--placeholder{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;background:#eef1f3;color:var(--text-muted);font-size:14px;font-weight:500}' +
-      '.body{padding:8px 40px 40px}' +
-      '.prose{max-width:620px;display:flex;flex-direction:column;gap:18px}' +
-      '.prose p{margin:0;font-size:16px;line-height:var(--lh-body);color:var(--text-body);text-wrap:pretty}' +
-      '.prose h2{margin:14px 0 0;font-size:22px;font-weight:700;letter-spacing:-.01em;color:var(--text-strong)}' +
-      '.prose ul{list-style:none;margin:2px 0 0;padding:0;display:flex;flex-direction:column;gap:10px}' +
-      '.prose li{position:relative;padding-left:24px;font-size:16px;line-height:var(--lh-body);color:var(--text-body)}' +
-      '.prose li:before{content:"";position:absolute;left:0;top:9px;width:8px;height:8px;border-radius:50%;background:var(--accent)}' +
-      '.prose-media{margin:16px 0 6px;border-radius:var(--radius-md);overflow:hidden;box-shadow:var(--shadow-card)}' +
-      '.prose-media img{width:100%;display:block;filter:grayscale(1)}' +
-      '.closer{margin:8px 40px 44px;padding:38px 34px;border-radius:var(--radius-lg);background:linear-gradient(180deg,var(--sky-100) 0%,rgba(227,251,255,.35) 100%);border:1px solid var(--border-card);text-align:center}' +
-      '.closer h2{margin:0 0 12px;font-size:26px;font-weight:700;letter-spacing:var(--ls-tight);color:var(--text-strong);text-wrap:balance}' +
-      '.closer p{margin:0 auto 22px;font-size:16px;line-height:var(--lh-body);color:var(--text-body);max-width:52ch}' +
-      '.btn-big{padding:13px 28px;font-size:15.5px}' +
-      '.foot{display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap;margin:0 40px;padding:26px 0 34px;border-top:1px solid var(--border-subtle)}' +
-      '.foot-links{display:flex;align-items:center;gap:24px;flex-wrap:wrap}' +
-      '.foot-links a{color:var(--link);font-size:14px;font-weight:500;text-decoration:none}' +
-      '.foot-links a:hover{color:var(--link-hover);text-decoration:underline}' +
-      '.learn{display:inline-flex;align-items:center;gap:8px;background:var(--accent-soft);color:var(--sky-700);font-size:14.5px;font-weight:600;padding:11px 20px;border-radius:var(--radius-pill);text-decoration:none}' +
-      '.learn:hover{filter:brightness(.96)}' +
-      '.learn svg{width:16px;height:16px}' +
-      '@media (max-width:720px){.hero{grid-template-columns:1fr;gap:28px;padding:24px 22px 36px}.headline{font-size:36px}.nav-links{display:none}.nav,.body,.foot{padding-left:22px;padding-right:22px}.foot{margin:0 22px}.closer{margin:0 22px 32px;padding:28px 22px}}';
+      '.pill{display:inline-flex;align-items:center;justify-content:center;border-radius:36px;font-size:16px;font-weight:500;letter-spacing:-.28px;padding:7px 17px;transition:filter .15s,transform .1s;cursor:pointer}' +
+      '.pill:active{transform:scale(.98)}' +
+      '.pill-ghost{background:rgba(0,0,0,.2);color:#fff}' +
+      '.pill-ghost:hover{filter:brightness(1.15)}' +
+      '.pill-solid{background:#fff;color:#000;box-shadow:0 2px 10px rgba(13,14,16,.08)}' +
+      '.pill-solid:hover{filter:brightness(.96)}' +
+      '.pill-ink{background:var(--ink);color:#fff}' +
+      '.pill-ink:hover{filter:brightness(1.25)}' +
+      '.pill-big{border-radius:200px;font-size:20px;padding:12px 26px}' +
+      '.hero{display:grid;grid-template-columns:1.02fr .98fr;gap:48px;align-items:center;padding:52px 0 72px}' +
+      '.eyebrow{font-size:13px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--sky-700);margin-bottom:18px}' +
+      'h1{font-size:clamp(36px,4vw,50px);line-height:1.08;font-weight:400;letter-spacing:-.03em;color:var(--ink);margin-bottom:18px;text-wrap:balance}' +
+      '.subhead{font-size:19px;line-height:1.4;color:var(--body);max-width:46ch}' +
+      '.hero-ctas{display:flex;align-items:center;gap:18px;margin-top:30px}' +
+      '.hero-media{position:relative;aspect-ratio:5/4;border-radius:var(--radius-lg);overflow:hidden;box-shadow:var(--shadow)}' +
+      '.hero-media img{width:100%;height:100%;object-fit:cover;filter:grayscale(1)}' +
+      '.hero-image--placeholder{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;background:#eef1f3;color:#8A8D93;font-size:14px;font-weight:500}' +
+      '.story{padding:76px 0 64px}' +
+      'h2.statement{font-size:clamp(26px,2.7vw,34px);font-weight:400;letter-spacing:-.025em;line-height:1.16;color:var(--ink);max-width:26ch;text-wrap:balance}' +
+      '.prose{margin-top:20px;max-width:620px;display:flex;flex-direction:column;gap:16px}' +
+      '.prose p{font-size:16.5px;line-height:1.6;letter-spacing:-.005em;color:var(--body);text-wrap:pretty}' +
+      '.rows{display:flex;flex-direction:column}' +
+      '.row{display:grid;grid-template-columns:1.05fr .95fr;gap:64px;align-items:center;padding:56px 0}' +
+      '.row.alt{grid-template-columns:.95fr 1.05fr}' +
+      '.row.alt .row-copy{order:2}' +
+      '.row.alt .row-media{order:1}' +
+      '.row.tint{background:linear-gradient(180deg,rgba(227,251,255,.55) 0%,rgba(227,251,255,0) 100%)}' +
+      '.row.solo{grid-template-columns:1fr}' +
+      '.row-media img{width:100%;height:auto}' +
+      '.row .prose{max-width:none}' +
+      '.pts{margin:22px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:11px}' +
+      '.pts li{position:relative;padding-left:26px;font-size:16px;line-height:1.5;color:var(--body)}' +
+      '.pts li:before{content:"";position:absolute;left:0;top:7px;width:9px;height:9px;border-radius:50%;background:var(--sky-500)}' +
+      '.interlude{background-image:var(--bg-sky);background-size:cover;background-position:center;padding:104px 0;text-align:center}' +
+      '.interlude h2{margin:0 auto;max-width:24ch}' +
+      '.interlude .prose{margin:18px auto 0;align-items:center;text-align:center}' +
+      '.darkband{background-image:var(--bg-dark);background-size:cover;background-position:center;color:#fff}' +
+      '.closer{padding:104px 0 84px;text-align:center}' +
+      '.closer h2{font-size:clamp(28px,3vw,38px);font-weight:400;letter-spacing:-.03em;line-height:1.14;color:#fff;margin:0 auto;max-width:24ch;text-wrap:balance}' +
+      '.closer p{margin:20px auto 0;font-size:17px;line-height:1.55;color:rgba(255,255,255,.85);max-width:50ch}' +
+      '.closer .pill-big{margin-top:34px}' +
+      '.foot{padding:26px 0 40px;border-top:1px solid rgba(255,255,255,.25)}' +
+      '.foot-grid{display:flex;justify-content:space-between;align-items:flex-start;gap:40px;flex-wrap:wrap}' +
+      '.foot h4{font-size:13px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,.65);margin-bottom:14px}' +
+      '.foot-links{display:flex;flex-direction:column;gap:8px}' +
+      '.foot-links a{font-size:15px;font-weight:500;color:#fff;opacity:.9}' +
+      '.foot-links a:hover{opacity:1}' +
+      '.foot-addr{font-size:15px;line-height:1.6;color:rgba(255,255,255,.85);font-style:normal;text-align:right}' +
+      '.foot-base{display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-top:44px;font-size:13px;color:rgba(255,255,255,.7)}' +
+      '.foot-base a:hover{color:#fff}' +
+      '.foot-logo{height:20px;width:auto}' +
+      '@media(max-width:820px){.shell{padding:0 22px}.nav-links{display:none}.hero{grid-template-columns:1fr;gap:30px;padding:34px 0 52px}' +
+      '.row,.row.alt{grid-template-columns:1fr;gap:26px;padding:40px 0}.row.alt .row-copy{order:1}.row.alt .row-media{order:2}' +
+      '.story{padding:52px 0 40px}.interlude,.closer{padding:72px 0}.foot-addr{text-align:left}}';
   }
-  // fill the fixed 1B structure with this ad's content. t() escapes per flavour.
-  // bodyImgTags: imagery revealed while scrolling — one every couple of sections
+  // fill the cumulus.world-mirror structure with this ad's content.
+  // t() escapes per flavour; bodyImgTags = a DIFFERENT image per content row.
   function cumulusMarkup(m, t, heroImgTag, L, bodyImgTags) {
     bodyImgTags = bodyImgTags || [];
-    var secs = m.sections || [];
-    var eyebrow = (secs[0] && secs[0].kicker) || m.badge || 'The promise';
-    var prose = '';
-    if (m.intro) prose += paraHTML(t, m.intro);
-    var nextImg = 0;
-    secs.forEach(function (s, i) {
-      if (s.title) prose += '<h2>' + t(s.title) + '</h2>';
-      if (s.body) prose += paraHTML(t, s.body);
-      prose += pointsHTML(t, s.points);
-      if (i % 2 === 1 && nextImg < bodyImgTags.length) {
-        prose += '<figure class="prose-media">' + bodyImgTags[nextImg++] + '</figure>';
-      }
-    });
-    if (!prose) prose = '<p>' + t(m.subhead || m.hook || '') + '</p>';
-    var cl = m.closer || {};
-    var closerHTML = (cl.title || cl.line)
-      ? '<section class="closer">' +
-          (cl.title ? '<h2>' + t(cl.title) + '</h2>' : '') +
-          (cl.line ? '<p>' + t(cl.line) + '</p>' : '') +
-          '<a class="btn btn-primary btn-big" href="' + esc(m.url !== '#' ? m.url : L.home) + '">' + t(m.cta || 'Visit us') + '</a>' +
-        '</section>'
+    var secs = (m.sections || []).slice();
+    var eyebrow = m.badge || (secs[0] && secs[0].kicker) || 'The promise';
+    var cta = m.cta || 'Sign Up';
+    // the LAST section becomes the centered sky interlude when there are
+    // enough sections to spare it; the rest alternate as side-by-side rows
+    var interludeSec = secs.length >= 3 ? secs.pop() : null;
+    // opening story: first paragraph as the big statement, the rest as prose
+    var storyParas = String(m.intro || '').split(/\n{2,}/).map(function (p) { return p.trim(); }).filter(Boolean);
+    var storyLead = storyParas.shift() || m.subhead || m.hook || '';
+    var story = storyLead
+      ? '<section class="story"><div class="shell">' +
+          '<h2 class="statement">' + t(storyLead) + '</h2>' +
+          (storyParas.length ? '<div class="prose">' + storyParas.map(function (p) { return '<p>' + t(p) + '</p>'; }).join('') + '</div>' : '') +
+        '</div></section>'
       : '';
-    return '<main class="page">' +
+    var rows = secs.map(function (s, i) {
+      var img = bodyImgTags.length ? bodyImgTags[i % bodyImgTags.length] : null;
+      return '<div class="row' + (i % 2 === 1 ? ' alt' : '') + (i % 2 === 0 ? ' tint' : '') + (img ? '' : ' solo') + '">' +
+        '<div class="row-copy">' +
+          (s.kicker ? '<div class="eyebrow">' + t(s.kicker) + '</div>' : '') +
+          (s.title ? '<h2 class="statement">' + t(s.title) + '</h2>' : '') +
+          (s.body ? '<div class="prose">' + paraHTML(t, s.body) + '</div>' : '') +
+          pointsHTML(t, s.points) +
+        '</div>' +
+        (img ? '<div class="row-media">' + img + '</div>' : '') +
+      '</div>';
+    }).join('');
+    var interlude = interludeSec
+      ? '<section class="interlude"><div class="shell">' +
+          (interludeSec.kicker ? '<div class="eyebrow">' + t(interludeSec.kicker) + '</div>' : '') +
+          (interludeSec.title ? '<h2 class="statement">' + t(interludeSec.title) + '</h2>' : '') +
+          (interludeSec.body ? '<div class="prose">' + paraHTML(t, interludeSec.body) + '</div>' : '') +
+        '</div></section>'
+      : '';
+    var cl = m.closer || {};
+    var closer = '<section class="closer"><div class="shell">' +
+      '<h2>' + t(cl.title || m.headline) + '</h2>' +
+      ((cl.line || m.subhead) ? '<p>' + t(cl.line || m.subhead) + '</p>' : '') +
+      '<a class="pill pill-solid pill-big" href="' + esc(L.signup) + '">' + t(cta) + '</a>' +
+    '</div></section>';
+    return '<div class="skyband"><div class="shell">' +
       '<nav class="nav">' +
-        '<a href="' + esc(L.home) + '" aria-label="Cumulus home">' + CUMULUS_LOGO + '</a>' +
+        '<a href="' + esc(L.home) + '" aria-label="Cumulus"><img class="nav-logo" src="' + esc(CUMULUS_ASSETS.logoWhite) + '" alt="Cumulus"></a>' +
         '<div class="nav-links">' +
           '<a href="' + esc(L.product) + '">Product</a><a href="' + esc(L.people) + '">People</a>' +
           '<a href="' + esc(L.partners) + '">Partners</a><a href="' + esc(L.press) + '">Press</a>' +
+          '<a href="' + esc(L.contact) + '">Contact</a>' +
         '</div>' +
-        '<div class="nav-cta"><a class="btn btn-ghost" href="' + esc(L.login) + '">Log In</a>' +
-          '<a class="btn btn-primary" href="' + esc(L.signup) + '">Sign Up</a></div>' +
+        '<div class="nav-cta"><a class="pill pill-ghost" href="' + esc(L.login) + '">Log In</a>' +
+          '<a class="pill pill-solid" href="' + esc(L.signup) + '">Sign Up</a></div>' +
       '</nav>' +
-      '<section class="hero"><div class="hero-copy">' +
-        '<p class="eyebrow">' + t(eyebrow) + '</p>' +
-        '<h1 class="headline">' + t(m.headline) + '</h1>' +
+      '<header class="hero"><div>' +
+        '<div class="eyebrow">' + t(eyebrow) + '</div>' +
+        '<h1>' + t(m.headline) + '</h1>' +
         (m.subhead ? '<p class="subhead">' + t(m.subhead) + '</p>' : '') +
-      '</div><div class="hero-media">' + heroImgTag + '</div></section>' +
-      '<section class="body"><div class="prose">' + prose + '</div></section>' +
-      closerHTML +
-      '<footer class="foot"><div class="foot-links">' +
-        '<a href="' + esc(L.home) + '">&larr; Back to Cumulus</a>' +
-        '<a href="' + esc(L.product) + '">Product</a><a href="' + esc(L.people) + '">People</a>' +
-      '</div>' +
-      '<a class="learn" href="' + esc(L.learn) + '">Learn more <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>' +
-      '</footer></main>';
+        '<div class="hero-ctas"><a class="pill pill-ink pill-big" href="' + esc(L.signup) + '">' + t(cta) + '</a></div>' +
+      '</div><div class="hero-media">' + heroImgTag + '</div></header>' +
+    '</div></div>' +
+    story +
+    (rows ? '<div class="rows shell">' + rows + '</div>' : '') +
+    interlude +
+    '<div class="darkband">' +
+      closer +
+      '<div class="shell"><footer class="foot">' +
+        '<div class="foot-grid">' +
+          '<div><h4>Get in touch</h4><div class="foot-links">' +
+            '<a href="' + esc(L.contact) + '">Email</a>' +
+            '<a href="' + esc(L.linkedin) + '" target="_blank" rel="noopener">LinkedIn</a>' +
+            '<a href="' + esc(L.instagram) + '" target="_blank" rel="noopener">Instagram</a>' +
+          '</div></div>' +
+          '<address class="foot-addr">220 5th Ave<br>17th Floor<br>New York, NY 10001</address>' +
+        '</div>' +
+        '<div class="foot-base">' +
+          '<a href="' + esc(L.home) + '"><img class="foot-logo" src="' + esc(CUMULUS_ASSETS.logoWhite) + '" alt="Cumulus"></a>' +
+          '<a href="' + esc(L.privacy) + '">Privacy Policy</a>' +
+          '<span>© ' + new Date().getFullYear() + ' All Rights Reserved</span>' +
+        '</div>' +
+      '</footer></div>' +
+    '</div>';
   }
   function cumulusPageHTML(m, heroDataURL, opts, track, galleryDataURLs) {
     var L = cumulusLinks(opts);
     var heroImg = heroDataURL
       ? '<img src="' + heroDataURL + '" alt="' + esc(m.headline || 'Cumulus') + '">'
       : '<div class="hero-image--placeholder">A memory worth keeping</div>';
-    // scroll imagery: the tool's real photos, minus whatever the hero already shows
+    // side-row imagery: the project's real photos, minus whatever the hero shows
     var bodyImgTags = (galleryDataURLs || []).filter(function (u) { return u && u !== heroDataURL; })
       .slice(0, 4).map(function (u) { return '<img src="' + u + '" alt="' + esc(m.brand || 'Cumulus') + '">'; });
     return '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n' +
       '<meta name="viewport" content="width=device-width, initial-scale=1">\n' +
       '<title>' + esc(m.headline) + ' · Cumulus</title>\n' +
-      '<link rel="preconnect" href="https://fonts.googleapis.com">\n' +
-      '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>\n' +
-      '<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400;1,500&display=swap" rel="stylesheet">\n' +
       '<style>' + cumulusCSS() + '</style>\n</head>\n<body>\n' +
       cumulusMarkup(m, function (x) { return esc(String(x)); }, heroImg, L, bodyImgTags) +
       '\n' + beaconJS(m, track) +
