@@ -835,6 +835,7 @@ window.Ads = window.Ads || {};
       }).join('');
       return '<div class="view-section"><div class="section-head"><h2>' + esc(r.name) + '</h2>' +
         '<span class="section-action"><span class="u-label">' + r.adKeys.length + ' ads · ' + tot.clicks + ' clicks · ' + tot.views + ' visits · ' + tot.outs + ' to site' + (tot.spendSet ? ' · ' + money(tot.spend) + ' spent' : '') + '</span>' +
+        '<button class="btn is-sm" data-round-dl="' + esc(r.id) + '">⬇ Download all</button>' +
         '<button class="btn is-ghost is-sm" data-round-edit="' + esc(r.id) + '">Edit ads</button>' +
         '<button class="icon-btn" data-round-del2="' + esc(r.id) + '" title="Delete round">' + icons().trash + '</button></span></div>' +
         '<div class="rndp-grid">' + cards + '</div></div>';
@@ -883,6 +884,21 @@ window.Ads = window.Ads || {};
     el.querySelectorAll('[data-round-edit]').forEach(function (b) {
       b.addEventListener('click', function () { roundEditor(p.id, b.getAttribute('data-round-edit')); });
     });
+    el.querySelectorAll('[data-round-dl]').forEach(function (b) {
+      b.addEventListener('click', function () { downloadRound(p.id, b.getAttribute('data-round-dl'), b); });
+    });
+    // double-click any ad card → the full ad lightbox (video plays, caption,
+    // details, download) — same window as the generator's saved shelf
+    el.querySelectorAll('.rndp-card').forEach(function (card) {
+      var tEl = card.querySelector('[data-rt2]');
+      var a = tEl && byKey[tEl.getAttribute('data-rt2')];
+      if (!a) return;
+      card.title = 'Double-click to open the full ad';
+      card.addEventListener('dblclick', function (e) {
+        if (e.target.closest('input, a, button, textarea')) return;   // spend box, IG links
+        if (Ads.openAdLightbox) Ads.openAdLightbox(a, null);
+      });
+    });
     el.querySelectorAll('[data-round-del2]').forEach(function (b) {
       b.addEventListener('click', function () {
         var rid = b.getAttribute('data-round-del2');
@@ -904,6 +920,59 @@ window.Ads = window.Ads || {};
       });
     });
     bindPlanSection(el, p, rounds);
+  }
+
+  // One ZIP per round: every ad's creative (PNG / real MP4) plus a .txt twin
+  // with the caption and its per-platform tracked links — everything needed
+  // to post manually anywhere and still have every click land in tracking.
+  function downloadRound(pid, rid, btn) {
+    var p = store.getProject(pid); if (!p) return;
+    var r = projRounds(p).filter(function (x) { return x.id === rid; })[0]; if (!r) return;
+    var byKey = savedByKey(p), lk = landingKeys(p);
+    var base = publicLinkBase();
+    var PLAT_NAMES = { ig: 'Instagram', fb: 'Facebook', tt: 'TikTok', x: 'X (Twitter)' };
+    var specs = [], names = [], txts = [], missingLanding = 0;
+    r.adKeys.forEach(function (k) {
+      var a = byKey[k]; if (!a) return;
+      var slug = util.slug(a.angle || a.name || k) + '-' + k.slice(-4);
+      specs.push(a); names.push(slug);
+      if (!lk[k]) missingLanding++;
+      var links = ROUND_PLATFORMS.map(function (pl) {
+        return PLAT_NAMES[pl.id] + ':  ' + base + '/a/' + k + '?s=' + pl.id;
+      }).join('\n');
+      txts.push({ name: slug + '.txt', text:
+        'CAPTION (paste as the post text)\n================================\n' + (a.caption || '—') +
+        '\n\nHEADLINE:    ' + (((a.headlineStart || '') + ' ' + (a.headlineHighlight || '')).trim() || '—') +
+        '\nDESCRIPTION: ' + (a.description || '—') +
+        '\nCTA:         ' + (a.cta || '—') +
+        '\n\nTRACKED LINK — use the one matching the platform you post on\n============================================================\n' + links +
+        (lk[k] ? '' : '\n\n⚠ This ad has NO published landing page yet — open Landing pages in the\ngenerator and publish first, or these links will show “Unknown link”.') +
+        '\n' });
+    });
+    if (!specs.length) return Ads.toast('No downloadable ads in this round', true);
+    var nVid = specs.filter(function (s) { return s.kind === 'video'; }).length;
+    if (nVid) Ads.toast(nVid + ' video' + (nVid === 1 ? '' : 's') + ' record in real time (~5s each) — hang tight');
+    var old = btn.innerHTML; btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> 0/' + specs.length;
+    var readme = 'ROUND: ' + r.name + '  (' + p.name + ') — ' + specs.length + ' ads\n\n' +
+      'Each ad = its creative (image or video) + a .txt twin with the caption\n' +
+      'and tracked links. To post manually:\n' +
+      '  1. Upload the creative, paste the caption.\n' +
+      '  2. Use the tracked link for THAT platform as the link on/under the\n' +
+      '     post (…?s=ig Instagram, ?s=fb Facebook, ?s=tt TikTok, ?s=x X).\n' +
+      'Every click routes through the collector, is logged per platform, and\n' +
+      'lands on the ad’s own landing page automatically — nothing else to\n' +
+      'set up. Results appear on the round page after “Sync live stats”.\n' +
+      (missingLanding ? '\n⚠ ' + missingLanding + ' ad(s) in this round have no published landing page yet —\ntheir links 404 until you publish Landing pages in the generator.\n' : '');
+    render.zip(specs, names, function (done, total) {
+      btn.innerHTML = '<span class="spinner"></span> ' + done + '/' + total;
+    }, [{ name: 'READ-ME.txt', text: readme }].concat(txts))
+      .then(function (blob) {
+        util.downloadBlob(blob, util.slug(p.name + '-' + r.name) + '.zip');
+        Ads.toast('Round downloaded — creatives, captions and tracked links for every platform');
+      })
+      .catch(function (e) { Ads.toast('Download failed: ' + ((e && e.message) || 'unknown'), true); })
+      .then(function () { btn.disabled = false; btn.innerHTML = old; });
   }
 
   /* ---- Post this round: budget + platforms + instructions → AI game plan →
