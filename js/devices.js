@@ -172,7 +172,11 @@ window.Ads = window.Ads || {};
     if (spec.kind === 'video' && Ads.video) {
       return Ads.video.mount(slot, spec, !!(opts && opts.animate));
     }
-    var w = slot.clientWidth || 250;
+    // clientWidth can be a few px mid-layout (e.g. the DAM iframe still
+    // settling when the app renders) — a truthy-but-tiny width used to
+    // produce a scale(~0.003) creative that looked like "text but no visual"
+    var w = slot.clientWidth;
+    if (!w || w < 40) w = 250;
     render.thumb(slot, spec, w, null);
     return null;
   }

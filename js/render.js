@@ -33,6 +33,7 @@ window.Ads = window.Ads || {};
     scalerEl.innerHTML = '<div class="ad-stage">' + r.html + '</div>';
     var stage = scalerEl.firstChild;
     var w = targetW || scalerEl.clientWidth || 600;
+    if (w < 40) w = 600;   // degenerate mid-layout width → sane default, never a scale(≈0) mount
     var scale = w / r.width;
     stage.style.transform = 'scale(' + scale + ')';
     scalerEl.style.width = w + 'px';
@@ -44,6 +45,7 @@ window.Ads = window.Ads || {};
   // tall formats. Used in tables / bulk cells / compare.
   function thumb(scalerEl, spec, boxW, boxH) {
     injectAdStyles();
+    if (!boxW || boxW < 40) boxW = 250;   // degenerate mid-layout width → sane default
     var r = T.renderHTML(spec);
     scalerEl.innerHTML = '<div class="ad-stage">' + r.html + '</div>';
     var stage = scalerEl.firstChild;

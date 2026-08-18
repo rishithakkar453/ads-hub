@@ -554,7 +554,8 @@ window.Ads = window.Ads || {};
   // Mount into slotEl (position:relative). animate=false → static poster frame.
   function mount(slotEl, spec, animate) {
     var d = dims(spec);
-    var boxW = slotEl.clientWidth || 260;
+    var boxW = slotEl.clientWidth;
+    if (!boxW || boxW < 40) boxW = 260;   // mid-layout widths of a few px must not produce a microscopic canvas
     var boxH = Math.round(boxW * d.h / d.w);
     slotEl.innerHTML = '';
     var canvas = document.createElement('canvas');

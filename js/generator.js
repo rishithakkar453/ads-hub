@@ -128,6 +128,8 @@ window.Ads = window.Ads || {};
     rememberProject(p.id);
     Ads.go('generator');
     setTimeout(backfillVideos, 80);   // process pre-feature videos (frames/transcript)
+    setTimeout(healMounts, 900);      // fix any creatives mounted before the layout settled
+    setTimeout(healMounts, 2600);
     setTimeout(function () { reportRenderDiag(p.id); }, 4000);
   }
   // Self-diagnostic: after the saved shelf has had time to decode + paint,
@@ -2382,6 +2384,33 @@ window.Ads = window.Ads || {};
     sec.replaceWith(tmp.firstChild);
     bindSaved(viewEl);
   }
+  // Re-mount any creative that mounted while its cell had no real layout —
+  // e.g. the DAM iframe still sizing when the app first rendered. The width
+  // clamps in devices/render keep such mounts visible; this pass restores
+  // exact cell-fitted sizing once layout settles, and again on resizes.
+  function healMounts() {
+    if (!viewEl) return;
+    var p = currentProject(); var saved = (p && p.savedAds) || [];
+    viewEl.querySelectorAll('.saved-cell[data-sv], .var-cell[data-vi]').forEach(function (cell) {
+      var slot = cell.querySelector('[data-ad-slot]');
+      if (!slot || slot.clientWidth < 40) return;
+      var vis = slot.firstChild;
+      if (!vis || !vis.getBoundingClientRect) return;
+      var r = vis.getBoundingClientRect();
+      if (r.width >= 10 && r.width >= slot.clientWidth * 0.5) return;   // healthy
+      var spec = null;
+      if (cell.hasAttribute('data-sv')) spec = saved[+cell.getAttribute('data-sv')];
+      else if (cell.hasAttribute('data-vi')) spec = gen.results[+cell.getAttribute('data-vi')];
+      if (!spec) return;
+      if (cell._vc) { try { cell._vc.stop(); } catch (e) {} cell._vc = null; }
+      var ctrl = devices.mountCreative(cell, spec, { animate: false });
+      if (ctrl) liveControllers.push(ctrl);
+    });
+  }
+  var healT = null;
+  window.addEventListener('resize', function () {
+    clearTimeout(healT); healT = setTimeout(healMounts, 250);
+  });
 
   /* ===================== bulk actions ==================================== */
   // adKeys that actually have a published, resolvable landing page (a tracked
