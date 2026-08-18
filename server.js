@@ -1739,6 +1739,26 @@ var server = http.createServer(function (req, res) {
     return sendJSON(res, 200, { enabled: !!effectiveKey(), model: MODEL, source: keySource() });
   }
 
+  // --- Render self-diagnostics: every client reports how the saved-ads shelf
+  // actually rendered on ITS machine (browser, iframe, images decoded, canvas
+  // painted, stage scales). Read data/track/diag.jsonl to debug "renders for
+  // me but not for them" without access to the other person's browser.
+  if (pathname === '/api/diag' && req.method === 'POST') {
+    if (!requireAppHeader(req, res)) return;
+    return readBody(req, function (raw, overSize) {
+      if (overSize) return sendJSON(res, 413, { error: 'too_big' });
+      var input; try { input = raw ? JSON.parse(raw) : {}; } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
+      var line = JSON.stringify({ at: new Date().toISOString(), d: input }).slice(0, 8000);
+      var f = path.join(TRACK_DIR, 'diag.jsonl');
+      fs.mkdir(TRACK_DIR, { recursive: true }, function () {
+        fs.stat(f, function (serr, st) {
+          if (!serr && st.size > 5 * 1024 * 1024) { try { fs.renameSync(f, f + '.1'); } catch (e) {} }
+          fs.appendFile(f, line + '\n', function () { sendJSON(res, 200, { ok: true }); });
+        });
+      });
+    }, 64 * 1024);
+  }
+
   // --- Set / clear the API key (persisted to a local file so it survives restarts) ---
   if (pathname === '/api/ai/key' && req.method === 'POST') {
     if (!requireAppHeader(req, res)) return;

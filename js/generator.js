@@ -128,6 +128,52 @@ window.Ads = window.Ads || {};
     rememberProject(p.id);
     Ads.go('generator');
     setTimeout(backfillVideos, 80);   // process pre-feature videos (frames/transcript)
+    setTimeout(function () { reportRenderDiag(p.id); }, 4000);
+  }
+  // Self-diagnostic: after the saved shelf has had time to decode + paint,
+  // measure how it ACTUALLY rendered on this machine and log it server-side
+  // (data/track/diag.jsonl). Debugs "shows for me, blank for a colleague"
+  // without needing access to the other person's browser. One report per
+  // project per page load; fire-and-forget, never user-visible.
+  var diagSent = {};
+  function reportRenderDiag(pid) {
+    try {
+      if (diagSent[pid] || gen.projectId !== pid) return;
+      diagSent[pid] = 1;
+      var shelf = document.querySelector('#gen-saved');
+      var p = store.getProject(pid);
+      var imgs = shelf ? [].slice.call(shelf.querySelectorAll('img')) : [];
+      var canvases = shelf ? [].slice.call(shelf.querySelectorAll('canvas')) : [];
+      var stages = shelf ? [].slice.call(shelf.querySelectorAll('.ad-stage')) : [];
+      var painted = 0;
+      canvases.slice(0, 6).forEach(function (cv) {
+        try {
+          var c = document.createElement('canvas'); c.width = 8; c.height = 8;
+          var x = c.getContext('2d'); x.drawImage(cv, 0, 0, 8, 8);
+          var d = x.getImageData(0, 0, 8, 8).data, s = 0;
+          for (var i = 0; i < d.length; i += 4) s += d[i] + d[i + 1] + d[i + 2];
+          if (s > 400) painted++;
+        } catch (e) { painted = -1; }
+      });
+      var visible = stages.filter(function (s) { var r = s.getBoundingClientRect(); return r.width > 5 && r.height > 5; }).length;
+      var report = {
+        why: 'saved-shelf render',
+        ua: navigator.userAgent.slice(0, 160),
+        viewport: window.innerWidth + 'x' + window.innerHeight,
+        framed: window.top !== window.self,
+        project: pid,
+        savedInStore: (p && p.savedAds || []).length,
+        shelfCells: shelf ? shelf.querySelectorAll('.ad-stage-scaler, canvas').length : -1,
+        imgs: imgs.length,
+        imgsDecoded: imgs.filter(function (im) { return im.naturalWidth > 0; }).length,
+        canvases: canvases.length,
+        canvasPaintedSample: painted + '/' + Math.min(6, canvases.length),
+        stages: stages.length,
+        stagesVisible: visible,
+        memoryMB: (performance && performance.memory) ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null
+      };
+      fetch('/api/diag', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ads-Hub': '1' }, body: JSON.stringify(report) }).catch(function () {});
+    } catch (e) {}
   }
   // the last opened project auto-reopens after a page reload, so saved ads
   // and the whole brief are right there without a trip to My Projects
