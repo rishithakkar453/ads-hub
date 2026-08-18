@@ -144,7 +144,7 @@ window.Ads = window.Ads || {};
     var rows = ads.map(function (a) {
       var d = C.derive(a);
       return '<tr class="is-clickable" data-openad="' + a.id + '">' +
-        '<td><div class="ad-cell"><div class="ad-thumb" data-thumb-ad="' + a.id + '"></div><div style="min-width:0"><div class="ac-name u-truncate">' + esc(a.name) + '</div><div class="u-faint" style="font-size:1.05rem">' + esc(T.tplById(a.template).label) + ' · ' + esc(a.angle || '—') + '</div></div></div></td>' +
+        '<td><div class="cr-cell"><div class="cr-thumb" data-thumb-ad="' + a.id + '"></div><div style="min-width:0"><div class="ac-name u-truncate">' + esc(a.name) + '</div><div class="u-faint" style="font-size:1.05rem">' + esc(T.tplById(a.template).label) + ' · ' + esc(a.angle || '—') + '</div></div></div></td>' +
         '<td>' + statusPill(a.status) + '</td>' +
         '<td class="num">' + fm('spend', d.spend) + '</td><td class="num">' + util.fmtCompact(d.impressions) + '</td>' +
         '<td class="num">' + fm('ctr', d.ctr) + '</td><td class="num">' + fm('cpc', d.cpc) + '</td>' +
@@ -174,7 +174,7 @@ window.Ads = window.Ads || {};
       title: a.name, xwide: true,
       body: '<div class="grid" style="grid-template-columns:40rem 1fr;gap:2.4rem;align-items:start">' +
           '<div>' +
-            '<div class="ad-stage-frame" style="padding:1.4rem"><div class="ad-stage-scaler" id="det-preview"></div></div>' +
+            '<div class="cr-stage-frame" style="padding:1.4rem"><div class="cr-stage-scaler" id="det-preview"></div></div>' +
             '<div class="btn-row" style="margin-top:1.4rem">' +
               '<button class="btn is-sm" id="det-download"><span class="btn-ico">' + icons().download + '</span> PNG</button>' +
               '<button class="btn is-ghost is-sm" id="det-edit"><span class="btn-ico">' + icons().edit + '</span> Edit creative</button>' +
@@ -270,9 +270,9 @@ window.Ads = window.Ads || {};
     Ads.form({ title: 'Meta IDs & targeting', fields: [
       { name: 'campaign', label: 'Campaign ID', default: a.metaIds.campaign },
       { name: 'adset', label: 'Ad set ID', default: a.metaIds.adset },
-      { name: 'ad', label: 'Ad ID', default: a.metaIds.ad },
+      { name: 'ad', label: 'Ad ID', default: a.metaIds.cr },
       { name: 'audience', label: 'Audience / notes', type: 'textarea', default: a.audience }
-    ], onSubmit: function (d) { store.updateAd(id, { metaIds: { campaign: d.campaign, adset: d.adset, ad: d.ad }, audience: d.audience }); Ads.closeModal(); Ads.toast('Saved'); } });
+    ], onSubmit: function (d) { store.updateAd(id, { metaIds: { campaign: d.campaign, adset: d.adset, ad: d.cr }, audience: d.audience }); Ads.closeModal(); Ads.toast('Saved'); } });
   }
 
   /* ===================== COMPARE ======================================== */
@@ -321,7 +321,7 @@ window.Ads = window.Ads || {};
         return '<div class="compare-row"><span class="cr-label">' + esc(m.label) + '</span><span class="cr-val' + (isBest ? ' best' : '') + '">' + fm(m.key, v) + '</span></div>';
       }).join('');
       return '<div class="compare-col ' + (idx === winIdx ? 'is-winner' : '') + '">' +
-        '<div class="cc-head"><div class="ad-thumb" data-thumb-ad="' + a.id + '" style="width:100%;height:120px;margin-bottom:1rem"></div>' +
+        '<div class="cc-head"><div class="cr-thumb" data-thumb-ad="' + a.id + '" style="width:100%;height:120px;margin-bottom:1rem"></div>' +
           '<div style="font-family:var(--font-display);text-transform:uppercase;font-size:1.5rem;line-height:1.1">' + esc(a.name) + '</div>' +
           (idx === winIdx ? '<span class="tag" style="color:var(--good);border-color:var(--good);margin-top:.6rem">Best ROAS</span>' : '') + '</div>' +
         rows + '</div>';
@@ -465,7 +465,7 @@ window.Ads = window.Ads || {};
     var body = rows.map(function (r) {
       var matched = byKey[r.key];
       return '<tr class="is-clickable" data-trkrow="' + esc(r.key) + '">' +
-        '<td><div class="ad-cell">' + (matched ? '<div class="ad-thumb" data-thumb-ad="' + matched.id + '"></div>' : '<div class="ad-thumb trk-nothumb">' + icons().globe + '</div>') +
+        '<td><div class="cr-cell">' + (matched ? '<div class="cr-thumb" data-thumb-ad="' + matched.id + '"></div>' : '<div class="cr-thumb trk-nothumb">' + icons().globe + '</div>') +
           '<div style="min-width:0"><div class="ac-name u-truncate">' + esc(r.name) + '</div>' +
           '<div class="u-faint" style="font-size:1.05rem">' + (r.page ? '/p/' + esc(r.page) : esc(r.headline)).slice(0, 60) + '</div></div></div></td>' +
         '<td class="trk-src">' + srcChips(r.bySrc) + '</td>' +
@@ -688,7 +688,7 @@ window.Ads = window.Ads || {};
         '</div>' +
       '</div>';
     if (matched.length) el.querySelector('#csv-apply').addEventListener('click', function () {
-      matched.forEach(function (m) { store.setMetrics(m.ad.id, m.metrics); }); Ads.toast('Updated ' + matched.length + ' ads'); Ads.go('dashboard');
+      matched.forEach(function (m) { store.setMetrics(m.cr.id, m.metrics); }); Ads.toast('Updated ' + matched.length + ' ads'); Ads.go('dashboard');
     });
     if (unmatched.length) el.querySelector('#csv-add').addEventListener('click', function () {
       store.addAds(unmatched.map(function (u) { return Object.assign(store.blankSpec(), { name: u.name, headlineStart: u.name }); }), { status: 'active' });
@@ -786,7 +786,7 @@ window.Ads = window.Ads || {};
         if (sp != null) { tot.spend += sp; tot.spendSet = true; }
         var outRate = st.views ? Math.round((st.outs || 0) / st.views * 100) : null;
         return '<div class="rndp-card">' +
-          '<div class="rndp-thumb ad-stage-scaler" data-rt2="' + esc(k) + '"></div>' +
+          '<div class="rndp-thumb cr-stage-scaler" data-rt2="' + esc(k) + '"></div>' +
           '<div class="rndp-body">' +
             '<div class="rndp-name"><strong>' + esc(a ? (a.angle || a.name || k) : (k + ' (no longer saved)')) + '</strong>' +
               '<span class="u-faint"> · ' + (a ? (a.kind === 'video' ? 'video' : 'post') : '?') + (lk[k] ? '' : ' · ⚠ no landing page') + '</span></div>' +
@@ -877,7 +877,7 @@ window.Ads = window.Ads || {};
         (x.placements && x.placements.length ? '<div class="u-faint" style="margin-top:0.3rem">' + esc(x.placements.join(' · ')) + '</div>' : '') + '</div></div>';
     }).join('');
     var adRows = (d.adPlan || []).map(function (x) {
-      return '<div class="pp-adrow"><strong>' + esc(x.ad) + '</strong> → ' + esc((x.platforms || []).join(', ')) +
+      return '<div class="pp-adrow"><strong>' + esc(x.cr) + '</strong> → ' + esc((x.platforms || []).join(', ')) +
         (x.budget ? ' · <b>' + esc(x.budget) + '</b>' : '') +
         (x.segment ? ' · aimed at <em>' + esc(x.segment) + '</em>' : '') +
         (x.note ? '<div class="u-faint">' + esc(x.note) + '</div>' : '') + '</div>';
@@ -1060,7 +1060,7 @@ window.Ads = window.Ads || {};
     var list = saved.map(function (a, i) {
       var key = a.adKey;
       return '<div class="fp-item rnd-card' + (sel[key] ? ' is-on' : '') + '" data-rk="' + esc(key) + '">' +
-        '<div class="rnd-thumbwrap"><div class="rnd-thumb ad-stage-scaler" data-rt="' + esc(key) + '"></div></div>' +
+        '<div class="rnd-thumbwrap"><div class="rnd-thumb cr-stage-scaler" data-rt="' + esc(key) + '"></div></div>' +
         '<span class="fp-tick">✓</span>' +
         '<div class="rnd-cap"><strong>' + esc(a.angle || a.name || ('Ad ' + (i + 1))) + '</strong>' +
           '<span>' + (a.kind === 'video' ? '▶ video' : 'post') + (lk[key] ? '' : ' · ⚠ no landing page') + '</span></div>' +

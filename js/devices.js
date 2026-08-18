@@ -69,7 +69,7 @@ window.Ads = window.Ads || {};
         '<span class="fbp-sub">Sponsored · <i class="fbp-globe">' + ICONS.globe + '</i></span></div>' +
         '<span class="fbp-dots">' + ICONS.dots + '</span></div>' +
       (caption ? '<div class="fbp-caption">' + truncate(caption, 125) + '</div>' : '') +
-      '<div class="fbp-creative" data-ad-slot></div>' +
+      '<div class="fbp-creative" data-cr-slot></div>' +
       '<div class="fbp-link"><div class="fbp-link-main">' +
         '<span class="fbp-domain">' + esc(domainOf(opts, spec).toUpperCase()) + '</span>' +
         '<span class="fbp-headline">' + esc(headlineOf(spec).slice(0, 58)) + '</span>' +
@@ -86,7 +86,7 @@ window.Ads = window.Ads || {};
       '<div class="igp-head">' + avatarOf(spec, 'igp-avatar') +
         '<div class="igp-id"><span class="igp-name">' + esc(handle) + '</span><span class="igp-sub">Sponsored</span></div>' +
         '<span class="igp-dots">' + ICONS.dots + '</span></div>' +
-      '<div class="igp-creative" data-ad-slot></div>' +
+      '<div class="igp-creative" data-cr-slot></div>' +
       '<div class="igp-cta"><span>' + esc(spec.cta || 'Learn more') + '</span><span class="igp-chev">›</span></div>' +
       '<div class="igp-actions"><span class="igp-left">' + ICONS.heart + ICONS.igcomment + ICONS.send + '</span><span class="igp-save">' + ICONS.bookmark + '</span></div>' +
       (caption ? '<div class="igp-caption"><b>' + esc(handle) + '</b> ' + truncate(caption, 100) + '</div>' : '') +
@@ -101,7 +101,7 @@ window.Ads = window.Ads || {};
         '<div class="xp-id"><span class="xp-name">' + esc(name) + '</span><span class="xp-handle">@' + esc(handle) + ' · Promoted</span></div>' +
         '<span class="xp-dots">' + ICONS.dots + '</span></div>' +
       (caption ? '<div class="xp-text">' + truncate(caption, 180) + '</div>' : '') +
-      '<div class="xp-creative" data-ad-slot></div>' +
+      '<div class="xp-creative" data-cr-slot></div>' +
       '<div class="xp-card"><span class="xp-domain">' + esc(domainOf(opts, spec)) + '</span>' +
         '<span class="xp-headline">' + esc(headlineOf(spec).slice(0, 60)) + '</span></div>' +
       '<div class="xp-actions"><span>' + ICONS.reply + '</span><span>' + ICONS.retweet + '</span><span>' + ICONS.heart + '</span><span class="xp-cta">' + esc(spec.cta || 'Learn more') + '</span></div>' +
@@ -112,7 +112,7 @@ window.Ads = window.Ads || {};
   function tiktokPost(spec, opts) {
     var handle = handleOf(spec), caption = spec.caption || '';
     return '<div class="ttp">' +
-      '<div class="ttp-creative" data-ad-slot></div>' +
+      '<div class="ttp-creative" data-cr-slot></div>' +
       '<div class="ttp-top"><span>Following</span><span class="is-active">For You</span></div>' +
       '<div class="ttp-rail">' +
         '<span class="ttp-av">' + avatarOf(spec, 'ttp-avatar') + '<i class="ttp-plus">' + ICONS.plus + '</i></span>' +
@@ -135,8 +135,8 @@ window.Ads = window.Ads || {};
   /* ---- Plain (no device, no platform chrome): creative + caption ---------- */
   function plainAd(spec) {
     var caption = spec.caption || '';
-    return '<div class="plain-ad">' +
-      '<div class="plain-creative" data-ad-slot></div>' +
+    return '<div class="plain-crv">' +
+      '<div class="plain-creative" data-cr-slot></div>' +
       (caption ? '<div class="plain-caption">' + esc(caption) + '</div>' : '') +
     '</div>';
   }
@@ -167,7 +167,7 @@ window.Ads = window.Ads || {};
   // Mount the creative into the slot. Returns a controller ({stop, poster}) for
   // video creatives, or null for static. opts.animate → play video loop.
   function mountCreative(rootEl, spec, opts) {
-    var slot = rootEl.querySelector('[data-ad-slot]');
+    var slot = rootEl.querySelector('[data-cr-slot]');
     if (!slot) return null;
     if (spec.kind === 'video' && Ads.video) {
       return Ads.video.mount(slot, spec, !!(opts && opts.animate));

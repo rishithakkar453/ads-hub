@@ -30,7 +30,7 @@ window.Ads = window.Ads || {};
   function mount(scalerEl, spec, targetW) {
     injectAdStyles();
     var r = T.renderHTML(spec);
-    scalerEl.innerHTML = '<div class="ad-stage">' + r.html + '</div>';
+    scalerEl.innerHTML = '<div class="cr-stage">' + r.html + '</div>';
     var stage = scalerEl.firstChild;
     var w = targetW || scalerEl.clientWidth || 600;
     if (w < 40) w = 600;   // degenerate mid-layout width → sane default, never a scale(≈0) mount
@@ -47,7 +47,7 @@ window.Ads = window.Ads || {};
     injectAdStyles();
     if (!boxW || boxW < 40) boxW = 250;   // degenerate mid-layout width → sane default
     var r = T.renderHTML(spec);
-    scalerEl.innerHTML = '<div class="ad-stage">' + r.html + '</div>';
+    scalerEl.innerHTML = '<div class="cr-stage">' + r.html + '</div>';
     var stage = scalerEl.firstChild;
     var scale = boxW / r.width;
     stage.style.transform = 'scale(' + scale + ')';

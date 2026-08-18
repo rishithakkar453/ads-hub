@@ -109,7 +109,7 @@ input[type="range"]::-moz-range-thumb {
 .var-grid.view--desktop { grid-template-columns: repeat(auto-fill, minmax(47rem, 1fr)); }
 
 /* plain view: just the creative + its caption — no device or platform chrome */
-.plain-ad { width: 100%; }
+.plain-crv { width: 100%; }
 .plain-creative { position: relative; overflow: hidden; border-radius: 0.9rem; background: #0c0d12; }
 .plain-caption { margin-top: 1rem; font-size: 1.28rem; line-height: 1.5; color: var(--muted); white-space: pre-wrap; }
 .var-cell {

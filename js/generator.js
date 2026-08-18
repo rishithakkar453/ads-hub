@@ -146,7 +146,7 @@ window.Ads = window.Ads || {};
       var p = store.getProject(pid);
       var imgs = shelf ? [].slice.call(shelf.querySelectorAll('img')) : [];
       var canvases = shelf ? [].slice.call(shelf.querySelectorAll('canvas')) : [];
-      var stages = shelf ? [].slice.call(shelf.querySelectorAll('.ad-stage')) : [];
+      var stages = shelf ? [].slice.call(shelf.querySelectorAll('.cr-stage')) : [];
       var painted = 0;
       canvases.slice(0, 6).forEach(function (cv) {
         try {
@@ -162,7 +162,7 @@ window.Ads = window.Ads || {};
       // and offsetParent (null ⇔ a display:none ancestor kills all layout)
       var cellsDiag = [];
       if (shelf) [].slice.call(shelf.querySelectorAll('.saved-cell')).slice(0, 3).forEach(function (cell) {
-        var slot = cell.querySelector('[data-ad-slot]');
+        var slot = cell.querySelector('[data-cr-slot]');
         var vis = slot && slot.firstChild;
         var r = (vis && vis.getBoundingClientRect) ? vis.getBoundingClientRect() : null;
         cellsDiag.push({
@@ -184,7 +184,7 @@ window.Ads = window.Ads || {};
         framed: window.top !== window.self,
         project: pid,
         savedInStore: (p && p.savedAds || []).length,
-        shelfCells: shelf ? shelf.querySelectorAll('.ad-stage-scaler, canvas').length : -1,
+        shelfCells: shelf ? shelf.querySelectorAll('.cr-stage-scaler, canvas').length : -1,
         shelfRect: shelfR ? Math.round(shelfR.width) + 'x' + Math.round(shelfR.height) + '@' + Math.round(shelfR.top) : null,
         shelfHidden: shelf ? (shelf.offsetParent === null) : null,
         imgs: imgs.length,
@@ -2418,7 +2418,7 @@ window.Ads = window.Ads || {};
     if (!viewEl) return;
     var p = currentProject(); var saved = (p && p.savedAds) || [];
     viewEl.querySelectorAll('.saved-cell[data-sv], .var-cell[data-vi]').forEach(function (cell) {
-      var slot = cell.querySelector('[data-ad-slot]');
+      var slot = cell.querySelector('[data-cr-slot]');
       if (!slot || slot.clientWidth < 40) return;
       var vis = slot.firstChild;
       if (!vis || !vis.getBoundingClientRect) return;
@@ -2710,7 +2710,7 @@ window.Ads = window.Ads || {};
           imgRow('after', 'Comparison “after” image') +
         '</div>' +
         '<div class="em-side">' +
-          '<div class="em-prevwrap"><div class="ad-stage-scaler" id="em-preview"></div></div>' +
+          '<div class="em-prevwrap"><div class="cr-stage-scaler" id="em-preview"></div></div>' +
           '<div class="em-capbox"><div class="u-label" style="margin-bottom:.5rem">Caption preview</div><div id="em-cap-prev" class="em-cap"></div></div>' +
         '</div>' +
       '</div>';

@@ -20,7 +20,7 @@
 }
 .vc-tag.is-video { color: var(--accent, #fff); border-color: var(--line-strong); }
 .vc-playbadge.is-clip { background: var(--accent, #ff7a3c); color: #10110a; border-color: transparent; }
-[data-ad-slot] canvas { display: block; }
+[data-cr-slot] canvas { display: block; }
 
 /* ---- Instagram feed post ------------------------------------------------- */
 .igp { background: #fff; color: #0b0b0c; font-family: Helvetica, Arial, sans-serif; }
@@ -69,7 +69,7 @@
 .dev-screen--full { aspect-ratio: 9 / 19; overflow: hidden; }
 .ttp { position: absolute; inset: 0; color: #fff; font-family: Helvetica, Arial, sans-serif; overflow: hidden; }
 .ttp-creative { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: #050507; }
-.ttp-creative canvas, .ttp-creative .ad-stage-scaler { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); }
+.ttp-creative canvas, .ttp-creative .cr-stage-scaler { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); }
 .ttp-creative::after { content: ''; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,0.35) 0%, transparent 18%, transparent 62%, rgba(0,0,0,0.65) 100%); pointer-events: none; }
 .ttp-top { position: absolute; top: 2.6rem; left: 0; right: 0; display: flex; gap: 1.8rem; justify-content: center; font-size: 1.25rem; z-index: 3; text-shadow: 0 1px 3px rgba(0,0,0,0.5); }
 .ttp-top .is-active { font-weight: 700; border-bottom: 2px solid #fff; padding-bottom: 0.3rem; }

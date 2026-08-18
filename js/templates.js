@@ -104,21 +104,21 @@ window.Ads = window.Ads || {};
   function density(spec) { return spec.density === 'minimal' || spec.density === 'rich' ? spec.density : 'standard'; }
   function badgeHTML(spec) {
     if (!spec.badge || density(spec) === 'minimal') return '';
-    return '<div class="ad-badge"><span class="ad-badge-dots"><i></i><i></i><i></i></span>' + esc(spec.badge) + '</div>';
+    return '<div class="cr-badge"><span class="cr-badge-dots"><i></i><i></i><i></i></span>' + esc(spec.badge) + '</div>';
   }
-  function ctaHTML(spec) { return spec.cta ? '<div class="ad-cta">' + esc(spec.cta) + '</div>' : ''; }
+  function ctaHTML(spec) { return spec.cta ? '<div class="cr-cta">' + esc(spec.cta) + '</div>' : ''; }
   // Compact bullet strip shown in "rich" density on templates without their own list.
   function richExtras(spec) {
     if (density(spec) !== 'rich') return '';
     var bullets = (spec.bullets || []).filter(Boolean).slice(0, 3);
     if (!bullets.length) return '';
-    return '<div class="ad-minilist">' + bullets.map(function (b) {
-      return '<span class="ad-minilist-item"><i>✓</i>' + esc(b) + '</span>';
+    return '<div class="cr-minilist">' + bullets.map(function (b) {
+      return '<span class="cr-minilist-item"><i>✓</i>' + esc(b) + '</span>';
     }).join('') + '</div>';
   }
   function brandHTML(spec) {
-    if (spec.logo) return '<img class="ad-logo" src="' + spec.logo + '" alt="" />';
-    return spec.brand ? '<div class="ad-brandmark">' + esc(spec.brand) + '</div>' : '';
+    if (spec.logo) return '<img class="cr-logo" src="' + spec.logo + '" alt="" />';
+    return spec.brand ? '<div class="cr-brandmark">' + esc(spec.brand) + '</div>' : '';
   }
 
   /* ---- Faux UI building blocks (so templates look real without uploads) -- */
@@ -142,7 +142,7 @@ window.Ads = window.Ads || {};
     var inner = spec.images && spec.images.product
       ? '<img class="ph-shot" src="' + spec.images.product + '" alt="" />'
       : '<div class="ph-ui">' + fauxDash(spec.accent) + '</div>';
-    return '<div class="ad-phone"><div class="ad-phone-notch"></div>' + inner + '</div>';
+    return '<div class="cr-phone"><div class="cr-phone-notch"></div>' + inner + '</div>';
   }
   function panel(slot, spec, kind) {
     var img = spec.images && spec.images[slot];
@@ -158,13 +158,13 @@ window.Ads = window.Ads || {};
   // spec.density (minimal|standard|rich) controls how much copy is on-image;
   // spec.align (left|center) controls the stack alignment.
   function stackCls(spec, forceCenter) {
-    return 'ad-stack' + ((forceCenter || spec.align === 'center') ? ' center' : '');
+    return 'cr-stack' + ((forceCenter || spec.align === 'center') ? ' center' : '');
   }
   var RENDER = {
     comparison: function (spec) {
       return '<div class="' + stackCls(spec) + '">' +
         badgeHTML(spec) +
-        '<h1 class="ad-headline ' + autoSize(spec) + '">' + headlineHTML(spec) + '</h1>' +
+        '<h1 class="cr-headline ' + autoSize(spec) + '">' + headlineHTML(spec) + '</h1>' +
         subtextBlock(spec) +
         '<div class="cmp-row">' + panel('before', spec, 'bad') + panel('after', spec, 'good') + '</div>' +
         richExtras(spec) +
@@ -174,7 +174,7 @@ window.Ads = window.Ads || {};
     phone: function (spec) {
       var copyFirst = spec.layout !== 'top'; // 'top' puts the device above the copy
       var copy = badgeHTML(spec) +
-        '<h1 class="ad-headline ' + autoSize(spec) + '">' + headlineHTML(spec) + '</h1>' +
+        '<h1 class="cr-headline ' + autoSize(spec) + '">' + headlineHTML(spec) + '</h1>' +
         subtextBlock(spec);
       return '<div class="' + stackCls(spec) + '">' +
         (copyFirst ? copy + fauxPhone(spec) : fauxPhone(spec) + copy) +
@@ -185,7 +185,7 @@ window.Ads = window.Ads || {};
     statement: function (spec) {
       return '<div class="' + stackCls(spec, spec.align !== 'left') + '">' +
         badgeHTML(spec) +
-        '<h1 class="ad-headline ' + autoSize(spec, 'xl') + '">' + headlineHTML(spec) + '</h1>' +
+        '<h1 class="cr-headline ' + autoSize(spec, 'xl') + '">' + headlineHTML(spec) + '</h1>' +
         subtextBlock(spec) +
         richExtras(spec) +
         ctaHTML(spec) +
@@ -196,9 +196,9 @@ window.Ads = window.Ads || {};
       var st = spec.stat || {};
       return '<div class="' + stackCls(spec, spec.align !== 'left') + '">' +
         badgeHTML(spec) +
-        '<div class="ad-stat"><span class="ad-stat-val">' + esc(st.value || '3x') + '</span>' +
-          (st.label ? '<span class="ad-stat-label">' + esc(st.label) + '</span>' : '') + '</div>' +
-        '<h1 class="ad-headline md">' + headlineHTML(spec) + '</h1>' +
+        '<div class="cr-stat"><span class="cr-stat-val">' + esc(st.value || '3x') + '</span>' +
+          (st.label ? '<span class="cr-stat-label">' + esc(st.label) + '</span>' : '') + '</div>' +
+        '<h1 class="cr-headline md">' + headlineHTML(spec) + '</h1>' +
         subtextBlock(spec) +
         ctaHTML(spec) +
       '</div>';
@@ -207,12 +207,12 @@ window.Ads = window.Ads || {};
       var q = spec.quote || {};
       return '<div class="' + stackCls(spec, spec.align !== 'left') + '">' +
         badgeHTML(spec) +
-        '<div class="ad-quote-mark">“</div>' +
-        '<blockquote class="ad-quote">' + esc(q.text || '') + '</blockquote>' +
-        '<div class="ad-quote-by">' +
-          '<div class="ad-avatar">' + esc((q.author || 'A').slice(0, 1).toUpperCase()) + '</div>' +
-          '<div><div class="ad-quote-author">' + esc(q.author || '') + '</div>' +
-          (q.role ? '<div class="ad-quote-role">' + esc(q.role) + '</div>' : '') + '</div>' +
+        '<div class="cr-quote-mark">“</div>' +
+        '<blockquote class="cr-quote">' + esc(q.text || '') + '</blockquote>' +
+        '<div class="cr-quote-by">' +
+          '<div class="cr-avatar">' + esc((q.author || 'A').slice(0, 1).toUpperCase()) + '</div>' +
+          '<div><div class="cr-quote-author">' + esc(q.author || '') + '</div>' +
+          (q.role ? '<div class="cr-quote-role">' + esc(q.role) + '</div>' : '') + '</div>' +
         '</div>' +
         ctaHTML(spec) +
       '</div>';
@@ -227,7 +227,7 @@ window.Ads = window.Ads || {};
       var media = hasImg ? '<div class="feat-media"><img src="' + spec.images.product + '" alt="" /></div>' : '';
       return '<div class="' + stackCls(spec) + '">' +
         badgeHTML(spec) +
-        '<h1 class="ad-headline ' + autoSize(spec) + '">' + headlineHTML(spec) + '</h1>' +
+        '<h1 class="cr-headline ' + autoSize(spec) + '">' + headlineHTML(spec) + '</h1>' +
         subtextBlock(spec) +
         '<div class="feat-row' + (hasImg ? ' has-img' : '') + '">' +
           (mediaLeft ? media + list : list + media) +
@@ -241,7 +241,7 @@ window.Ads = window.Ads || {};
         : fauxDash(spec.accent);
       var mediaBlock = '<div class="pi-media">' + media + '</div>';
       var textBlock = '<div class="pi-foot">' +
-          '<h1 class="ad-headline sm">' + headlineHTML(spec) + '</h1>' +
+          '<h1 class="cr-headline sm">' + headlineHTML(spec) + '</h1>' +
           ctaHTML(spec) +
         '</div>';
       var textFirst = spec.layout === 'bottom'; // media sits below the text bar
@@ -257,7 +257,7 @@ window.Ads = window.Ads || {};
         '<div class="ov-shade ov-' + pos + '"></div>' +
         '<div class="ov-content ov-' + pos + (spec.align === 'center' ? ' center' : '') + '">' +
           badgeHTML(spec) +
-          '<h1 class="ad-headline ' + autoSize(spec) + '">' + headlineHTML(spec) + '</h1>' +
+          '<h1 class="cr-headline ' + autoSize(spec) + '">' + headlineHTML(spec) + '</h1>' +
           subtextBlock(spec) +
           ctaHTML(spec) +
         '</div>' +
@@ -266,9 +266,9 @@ window.Ads = window.Ads || {};
   };
   function subtextBlock(spec) {
     if (!spec.subtext || density(spec) === 'minimal') return '';
-    return '<p class="ad-subtext">' + applyBold(spec.subtext, spec.boldPhrases) + '</p>';
+    return '<p class="cr-subtext">' + applyBold(spec.subtext, spec.boldPhrases) + '</p>';
   }
-  function brandFoot(spec) { var b = brandHTML(spec); return b ? '<div class="ad-foot">' + b + '</div>' : ''; }
+  function brandFoot(spec) { var b = brandHTML(spec); return b ? '<div class="cr-foot">' + b + '</div>' : ''; }
 
   /* ---- Effective colours from theme/background --------------------------- */
   function colors(spec) {
@@ -295,7 +295,10 @@ window.Ads = window.Ads || {};
 
   /* ---- Public render ----------------------------------------------------- */
   // Returns { html, width, height } — html is a self-contained, XML-well-formed
-  // <div class="ad ..."> with all per-ad values supplied as inline CSS vars.
+  // <div class="cr ..."> with all per-ad values supplied as inline CSS vars.
+  // ("cr", not "ad" — class names containing "ad" get display:none'd by the
+  // cosmetic filters of every major ad blocker, which blanked all creatives
+  // for any viewer running one. Same reason the slot attr is data-cr-slot.)
   function renderHTML(spec) {
     var fmt = FORMATS[spec.format] || FORMATS.square;
     var c = colors(spec);
@@ -307,48 +310,48 @@ window.Ads = window.Ads || {};
       '--ad-accent:' + c.accent, '--ad-on-accent:' + c.onAccent,
       '--ad-font-display:' + font.display, '--ad-font-body:' + font.body, '--ad-display-weight:' + font.weight
     ].join(';');
-    var html = '<div class="ad ad--' + esc(spec.template) + ' fmt--' + esc(spec.format) +
+    var html = '<div class="cr cr--' + esc(spec.template) + ' fmt--' + esc(spec.format) +
       ' den--' + esc(spec.density || 'standard') +
       '" style="width:' + fmt.w + 'px;height:' + fmt.h + 'px;' + vars + '">' +
-      '<div class="ad-inner' + (spec.template === 'overlay' ? ' is-flush' : '') + '">' + inner + '</div></div>';
+      '<div class="cr-inner' + (spec.template === 'overlay' ? ' is-flush' : '') + '">' + inner + '</div></div>';
     return { html: html, width: fmt.w, height: fmt.h };
   }
 
   /* ---- The shared ad stylesheet (preview + export use the SAME string) --- */
   function adCSS() {
     return [
-      '.ad{box-sizing:border-box;position:relative;overflow:hidden;background:var(--ad-bg);color:var(--ad-fg);',
+      '.cr{box-sizing:border-box;position:relative;overflow:hidden;background:var(--ad-bg);color:var(--ad-fg);',
         'font-family:var(--ad-font-body);-webkit-font-smoothing:antialiased;}',
-      '.ad *,.ad *::before,.ad *::after{box-sizing:border-box;}',
-      '.ad-inner{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;padding:96px 90px;}',
-      '.fmt--story .ad-inner{padding:150px 96px;}',
-      '.ad-stack{display:flex;flex-direction:column;gap:38px;}',
-      '.ad-stack.center{align-items:center;text-align:center;}',
+      '.cr *,.cr *::before,.cr *::after{box-sizing:border-box;}',
+      '.cr-inner{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;padding:96px 90px;}',
+      '.fmt--story .cr-inner{padding:150px 96px;}',
+      '.cr-stack{display:flex;flex-direction:column;gap:38px;}',
+      '.cr-stack.center{align-items:center;text-align:center;}',
       // badge
-      '.ad-badge{align-self:flex-start;display:inline-flex;align-items:center;gap:14px;background:var(--ad-panel);',
+      '.cr-badge{align-self:flex-start;display:inline-flex;align-items:center;gap:14px;background:var(--ad-panel);',
         'border:1px solid var(--ad-panel-line);color:var(--ad-fg);font-size:24px;font-weight:600;letter-spacing:.02em;',
         'padding:14px 26px;border-radius:100px;}',
-      '.ad-stack.center .ad-badge{align-self:center;}',
-      '.ad-badge-dots{display:inline-flex;gap:5px;}',
-      '.ad-badge-dots i{width:12px;height:12px;border-radius:50%;background:var(--ad-accent);display:block;opacity:.9;}',
-      '.ad-badge-dots i:nth-child(2){opacity:.6;}.ad-badge-dots i:nth-child(3){opacity:.4;}',
+      '.cr-stack.center .cr-badge{align-self:center;}',
+      '.cr-badge-dots{display:inline-flex;gap:5px;}',
+      '.cr-badge-dots i{width:12px;height:12px;border-radius:50%;background:var(--ad-accent);display:block;opacity:.9;}',
+      '.cr-badge-dots i:nth-child(2){opacity:.6;}.cr-badge-dots i:nth-child(3){opacity:.4;}',
       // headline
-      '.ad-headline{margin:0;font-family:var(--ad-font-display);font-weight:var(--ad-display-weight);',
+      '.cr-headline{margin:0;font-family:var(--ad-font-display);font-weight:var(--ad-display-weight);',
         'font-size:96px;line-height:.98;letter-spacing:-.02em;}',
-      '.ad-headline.xl{font-size:128px;}.ad-headline.md{font-size:78px;}.ad-headline.sm{font-size:60px;}',
-      '.ad-headline .hl{color:var(--ad-accent);}',
+      '.cr-headline.xl{font-size:128px;}.cr-headline.md{font-size:78px;}.cr-headline.sm{font-size:60px;}',
+      '.cr-headline .hl{color:var(--ad-accent);}',
       // subtext
-      '.ad-subtext{margin:0;font-size:33px;line-height:1.36;color:var(--ad-muted);max-width:18em;}',
-      '.ad-stack.center .ad-subtext{max-width:16em;}',
-      '.ad-subtext b{color:var(--ad-fg);font-weight:700;}',
+      '.cr-subtext{margin:0;font-size:33px;line-height:1.36;color:var(--ad-muted);max-width:18em;}',
+      '.cr-stack.center .cr-subtext{max-width:16em;}',
+      '.cr-subtext b{color:var(--ad-fg);font-weight:700;}',
       // cta
-      '.ad-cta{align-self:flex-start;background:var(--ad-accent);color:var(--ad-on-accent);font-weight:700;',
+      '.cr-cta{align-self:flex-start;background:var(--ad-accent);color:var(--ad-on-accent);font-weight:700;',
         'font-size:31px;letter-spacing:.01em;padding:24px 44px;border-radius:14px;}',
-      '.ad-stack.center .ad-cta{align-self:center;}',
+      '.cr-stack.center .cr-cta{align-self:center;}',
       // brand foot
-      '.ad-foot{margin-top:18px;}',
-      '.ad-brandmark{font-family:var(--ad-font-display);font-weight:var(--ad-display-weight);font-size:34px;letter-spacing:.18em;text-transform:uppercase;opacity:.85;}',
-      '.ad-logo{height:54px;width:auto;object-fit:contain;}',
+      '.cr-foot{margin-top:18px;}',
+      '.cr-brandmark{font-family:var(--ad-font-display);font-weight:var(--ad-display-weight);font-size:34px;letter-spacing:.18em;text-transform:uppercase;opacity:.85;}',
+      '.cr-logo{height:54px;width:auto;object-fit:contain;}',
       // comparison
       '.cmp-row{display:flex;gap:34px;}',
       '.cmp-panel{position:relative;flex:1;background:var(--ad-panel);border:1px solid var(--ad-panel-line);border-radius:22px;padding:34px;min-height:330px;display:flex;flex-direction:column;gap:20px;}',
@@ -373,20 +376,20 @@ window.Ads = window.Ads || {};
       '.fx-chart{display:flex;align-items:flex-end;gap:10px;height:120px;}',
       '.fx-chart span{flex:1;background:linear-gradient(180deg,var(--ad-accent),#c2410c);border-radius:6px 6px 0 0;min-height:8px;}',
       // phone
-      '.ad-phone{position:relative;align-self:center;width:430px;height:600px;background:#0b0c12;border:14px solid #1c1f2b;border-radius:54px;box-shadow:0 40px 90px rgba(0,0,0,.45);overflow:hidden;}',
-      '.ad-phone-notch{position:absolute;top:18px;left:50%;transform:translateX(-50%);width:130px;height:26px;background:#1c1f2b;border-radius:0 0 18px 18px;z-index:3;}',
-      '.ad-phone .ph-shot{width:100%;height:100%;object-fit:cover;}',
-      '.ad-phone .ph-ui{position:absolute;inset:0;padding:54px 26px 26px;display:flex;align-items:center;}',
+      '.cr-phone{position:relative;align-self:center;width:430px;height:600px;background:#0b0c12;border:14px solid #1c1f2b;border-radius:54px;box-shadow:0 40px 90px rgba(0,0,0,.45);overflow:hidden;}',
+      '.cr-phone-notch{position:absolute;top:18px;left:50%;transform:translateX(-50%);width:130px;height:26px;background:#1c1f2b;border-radius:0 0 18px 18px;z-index:3;}',
+      '.cr-phone .ph-shot{width:100%;height:100%;object-fit:cover;}',
+      '.cr-phone .ph-ui{position:absolute;inset:0;padding:54px 26px 26px;display:flex;align-items:center;}',
       // stat
-      '.ad-stat{display:flex;flex-direction:column;align-items:center;gap:6px;}',
-      '.ad-stat-val{font-family:var(--ad-font-display);font-weight:var(--ad-display-weight);font-size:300px;line-height:.86;color:var(--ad-accent);letter-spacing:-.03em;}',
-      '.ad-stat-label{font-size:34px;color:var(--ad-muted);font-weight:600;}',
+      '.cr-stat{display:flex;flex-direction:column;align-items:center;gap:6px;}',
+      '.cr-stat-val{font-family:var(--ad-font-display);font-weight:var(--ad-display-weight);font-size:300px;line-height:.86;color:var(--ad-accent);letter-spacing:-.03em;}',
+      '.cr-stat-label{font-size:34px;color:var(--ad-muted);font-weight:600;}',
       // quote
-      '.ad-quote-mark{font-family:Georgia,serif;font-size:160px;line-height:.5;height:80px;color:var(--ad-accent);}',
-      '.ad-quote{margin:0;font-family:var(--ad-font-display);font-weight:var(--ad-display-weight);font-size:62px;line-height:1.12;letter-spacing:-.01em;max-width:15em;}',
-      '.ad-quote-by{display:flex;align-items:center;gap:20px;}',
-      '.ad-avatar{width:74px;height:74px;border-radius:50%;background:var(--ad-accent);color:var(--ad-on-accent);display:flex;align-items:center;justify-content:center;font-size:34px;font-weight:800;}',
-      '.ad-quote-author{font-size:30px;font-weight:700;}.ad-quote-role{font-size:24px;color:var(--ad-muted);}',
+      '.cr-quote-mark{font-family:Georgia,serif;font-size:160px;line-height:.5;height:80px;color:var(--ad-accent);}',
+      '.cr-quote{margin:0;font-family:var(--ad-font-display);font-weight:var(--ad-display-weight);font-size:62px;line-height:1.12;letter-spacing:-.01em;max-width:15em;}',
+      '.cr-quote-by{display:flex;align-items:center;gap:20px;}',
+      '.cr-avatar{width:74px;height:74px;border-radius:50%;background:var(--ad-accent);color:var(--ad-on-accent);display:flex;align-items:center;justify-content:center;font-size:34px;font-weight:800;}',
+      '.cr-quote-author{font-size:30px;font-weight:700;}.cr-quote-role{font-size:24px;color:var(--ad-muted);}',
       // features
       '.feat-row{display:flex;gap:46px;align-items:center;}',
       '.feat-list{display:flex;flex-direction:column;gap:24px;flex:1;}',
@@ -397,11 +400,11 @@ window.Ads = window.Ads || {};
       '.pi-media{flex:1;border-radius:22px;overflow:hidden;background:var(--ad-panel);display:flex;align-items:center;justify-content:center;}',
       '.pi-media img{width:100%;height:100%;object-fit:cover;}',
       '.pi-foot{display:flex;align-items:center;justify-content:space-between;gap:24px;margin-top:40px;}',
-      '.pi-foot .ad-headline{margin:0;}',
-      '.ad--plain-image .pi-foot{margin-top:0;margin-bottom:40px;}',
-      '.ad--plain-image .pi-media + .pi-foot{margin-top:40px;margin-bottom:0;}',
+      '.pi-foot .cr-headline{margin:0;}',
+      '.cr--plain-image .pi-foot{margin-top:0;margin-bottom:40px;}',
+      '.cr--plain-image .pi-media + .pi-foot{margin-top:40px;margin-bottom:0;}',
       // overlay (full-bleed image + gradient shade + copy)
-      '.ad-inner.is-flush{padding:0;}',
+      '.cr-inner.is-flush{padding:0;}',
       '.ov-wrap{position:absolute;inset:0;}',
       '.ov-img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}',
       '.ov-fallback{background:radial-gradient(80rem 80rem at 30% 20%,rgba(255,255,255,0.12),transparent 60%),linear-gradient(160deg,#15151c,#08080c);}',
@@ -414,16 +417,16 @@ window.Ads = window.Ads || {};
       '.ov-content.ov-top{top:0;}',
       '.ov-content.ov-center{top:50%;transform:translateY(-50%);align-items:center;text-align:center;}',
       '.ov-content.center{align-items:center;text-align:center;}',
-      '.ov-content .ad-badge{align-self:flex-start;}',
-      '.ov-content.ov-center .ad-badge,.ov-content.center .ad-badge{align-self:center;}',
-      '.ov-content .ad-cta{align-self:flex-start;}',
-      '.ov-content.ov-center .ad-cta,.ov-content.center .ad-cta{align-self:center;}',
-      '.ov-content .ad-subtext{color:rgba(255,255,255,0.86);}',
+      '.ov-content .cr-badge{align-self:flex-start;}',
+      '.ov-content.ov-center .cr-badge,.ov-content.center .cr-badge{align-self:center;}',
+      '.ov-content .cr-cta{align-self:flex-start;}',
+      '.ov-content.ov-center .cr-cta,.ov-content.center .cr-cta{align-self:center;}',
+      '.ov-content .cr-subtext{color:rgba(255,255,255,0.86);}',
       // rich-density mini feature strip
-      '.ad-minilist{display:flex;flex-wrap:wrap;gap:14px 26px;}',
-      '.ad-minilist-item{display:inline-flex;align-items:center;gap:12px;font-size:27px;color:var(--ad-muted);}',
-      '.ad-minilist-item i{font-style:normal;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:50%;background:var(--ad-accent);color:var(--ad-on-accent);font-size:18px;font-weight:800;}',
-      '.ad-stack.center .ad-minilist{justify-content:center;}'
+      '.cr-minilist{display:flex;flex-wrap:wrap;gap:14px 26px;}',
+      '.cr-minilist-item{display:inline-flex;align-items:center;gap:12px;font-size:27px;color:var(--ad-muted);}',
+      '.cr-minilist-item i{font-style:normal;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:50%;background:var(--ad-accent);color:var(--ad-on-accent);font-size:18px;font-weight:800;}',
+      '.cr-stack.center .cr-minilist{justify-content:center;}'
     ].join('');
   }
 
