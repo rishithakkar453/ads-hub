@@ -1025,14 +1025,16 @@ window.Ads = window.Ads || {};
     var post = box.querySelector('#pp-post');
     if (post) post.addEventListener('click', function () {
       Ads.modal({
-        title: 'One step before direct posting', wide: true,
-        body: '<p class="u-muted">Posting straight from Ads Hub needs your <strong>Meta connection</strong> — a one-time setup in your Meta Business Manager:</p>' +
+        title: 'Connect Instagram to post directly', wide: true,
+        body: '<p class="u-muted">One-time setup — <strong>no Facebook Page, no Business Manager</strong>. Ads Hub then publishes this round straight to your Instagram:</p>' +
           '<ol style="margin:1.2rem 0 1.2rem 2rem;line-height:1.9;font-size:1.3rem">' +
-            '<li>Business Settings → <strong>System Users</strong> → create one</li>' +
-            '<li>Grant it your ad account, Facebook Page and Instagram account</li>' +
-            '<li>Generate a token with <strong>ads_management</strong>, <strong>pages_manage_posts</strong>, <strong>instagram_content_publish</strong></li>' +
+            '<li>In the Instagram app: switch the account to a <strong>professional account</strong> (Settings → Account type)</li>' +
+            '<li>At <strong>developers.facebook.com</strong> (free developer login): create an app → add the <strong>Instagram</strong> product → “API setup with Instagram business login”</li>' +
+            '<li>Log in there with the Instagram account and approve <strong>instagram_business_basic</strong>, <strong>instagram_business_content_publish</strong>, <strong>instagram_business_manage_insights</strong></li>' +
+            '<li>Copy the access token it shows and tell Claude it’s ready — posting + per-post insights get wired here</li>' +
           '</ol>' +
-          '<p class="u-muted">Tell Claude the token is ready and posting gets wired here — this button will then publish the approved plan directly. Until then, post manually: each ad’s platform links are one click away below.</p>' +
+          '<p class="u-muted">Budget note: this path publishes the posts; putting money behind one is a manual <strong>Boost</strong> tap in the Instagram app. Fully automatic paid campaigns (spend + CPC syncing back here) are a later upgrade — that’s the only part that needs Meta Business Manager and a (never-used) Facebook Page.</p>' +
+          '<p class="u-muted">Until then, post manually: each ad’s platform links are one click away below.</p>' +
           '<div class="btn-row" style="margin-top:1.4rem"><button class="btn is-ghost is-sm" id="pp-links">Open the round’s links</button></div>',
         foot: [{ label: 'Close', act: 'cancel', ghost: true }],
         onMount: function (m) {
