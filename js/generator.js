@@ -3151,7 +3151,8 @@ window.Ads = window.Ads || {};
   }
 
   /* ===================== lightbox ======================================== */
-  function openAdLightbox(s, idx) {
+  function openAdLightbox(s, idx, lbOpts) {
+    lbOpts = lbOpts || {};
     var dom = briefLib.domain(gen.brief);
     var isVideo = s.kind === 'video';
     var typeRow = isVideo
@@ -3190,13 +3191,22 @@ window.Ads = window.Ads || {};
           Ads.closeModal();
           editModal(s, { title: 'Edit ad', onSave: function (updated) {
             if (idx != null && gen.results[idx]) { gen.results[idx] = updated; refreshResults(); return; }
-            // a SAVED ad opened via double-click: persist by savedId — this path
-            // used to silently drop the edit (incl. applied clips) on the floor
+            // a SAVED ad: persist into the project that OWNS it. The generator's
+            // open project can be a different one — or none at all — when the
+            // lightbox was opened from the Campaign Rounds page, and the old
+            // currentProject() lookup silently dropped those saves.
             if (updated.savedId) {
-              var p = currentProject(); if (!p) return;
-              var found = false;
-              var next = (p.savedAds || []).map(function (a) { if (a.savedId === updated.savedId) { found = true; return updated; } return a; });
-              if (found) { store.updateProject(p.id, { savedAds: next }); refreshSaved(); Ads.toast('Saved ad updated'); }
+              var owner = null;
+              store.listProjects().forEach(function (pr) {
+                if (!owner && (pr.savedAds || []).some(function (a) { return a.savedId === updated.savedId; })) owner = pr;
+              });
+              if (!owner) { Ads.toast('Could not find this saved ad in any project — the edit was not saved', true); return; }
+              var next2 = (owner.savedAds || []).map(function (a) { return a.savedId === updated.savedId ? updated : a; });
+              store.updateProject(owner.id, { savedAds: next2 });
+              refreshSaved();
+              Ads.toast('Saved ad updated');
+              if (lbOpts.onSaved) { try { lbOpts.onSaved(updated); } catch (e) {} }
+              return;
             }
           } });
         }

@@ -144,7 +144,7 @@ img { max-width: 100%; display: block; }
 .view-section { margin-bottom: 3.6rem; }
 .section-head { display: flex; align-items: baseline; gap: 1.6rem; margin-bottom: 1.8rem; }
 .section-head h2 { font-size: 1.8rem; text-transform: uppercase; letter-spacing: 0.02em; }
-.section-head .section-action { margin-left: auto; }
+.section-head .section-action { margin-left: auto; display: inline-flex; align-items: center; gap: 0.8rem; }
 
 /* Buttons ------------------------------------------------------------------ */
 .btn {

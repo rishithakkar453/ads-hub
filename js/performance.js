@@ -835,7 +835,7 @@ window.Ads = window.Ads || {};
       }).join('');
       return '<div class="view-section"><div class="section-head"><h2>' + esc(r.name) + '</h2>' +
         '<span class="section-action"><span class="u-label">' + r.adKeys.length + ' ads · ' + tot.clicks + ' clicks · ' + tot.views + ' visits · ' + tot.outs + ' to site' + (tot.spendSet ? ' · ' + money(tot.spend) + ' spent' : '') + '</span>' +
-        '<button class="btn is-sm" data-round-dl="' + esc(r.id) + '">⬇ Download all</button>' +
+        '<button class="btn is-ghost is-sm" data-round-dl="' + esc(r.id) + '">⬇ Download all</button>' +
         '<button class="btn is-ghost is-sm" data-round-edit="' + esc(r.id) + '">Edit ads</button>' +
         '<button class="icon-btn" data-round-del2="' + esc(r.id) + '" title="Delete round">' + icons().trash + '</button></span></div>' +
         '<div class="rndp-grid">' + cards + '</div></div>';
@@ -885,7 +885,19 @@ window.Ads = window.Ads || {};
       b.addEventListener('click', function () { roundEditor(p.id, b.getAttribute('data-round-edit')); });
     });
     el.querySelectorAll('[data-round-dl]').forEach(function (b) {
-      b.addEventListener('click', function () { downloadRound(p.id, b.getAttribute('data-round-dl'), b); });
+      b.addEventListener('click', function () {
+        var rid = b.getAttribute('data-round-dl');
+        var r2 = rounds.filter(function (x) { return x.id === rid; })[0]; if (!r2) return;
+        var specs2 = r2.adKeys.map(function (k) { return byKey[k]; }).filter(Boolean);
+        var nVid2 = specs2.filter(function (s) { return s.kind === 'video'; }).length;
+        Ads.confirm({
+          title: 'Download this round?',
+          message: specs2.length + ' ad' + (specs2.length === 1 ? '' : 's') + ' → one ZIP with each creative plus its caption and per-platform tracked links.' +
+            (nVid2 ? ' The ' + nVid2 + ' video' + (nVid2 === 1 ? '' : 's') + ' record in real time (~5s each), so it takes a moment.' : ''),
+          okLabel: 'Download',
+          onConfirm: function () { downloadRound(p.id, rid, b); }
+        });
+      });
     });
     // double-click any ad card → the full ad lightbox (video plays, caption,
     // details, download) — same window as the generator's saved shelf
@@ -896,7 +908,8 @@ window.Ads = window.Ads || {};
       card.title = 'Double-click to open the full ad';
       card.addEventListener('dblclick', function (e) {
         if (e.target.closest('input, a, button, textarea')) return;   // spend box, IG links
-        if (Ads.openAdLightbox) Ads.openAdLightbox(a, null);
+        // onSaved: re-render this page so the card immediately shows the edit
+        if (Ads.openAdLightbox) Ads.openAdLightbox(a, null, { onSaved: function () { Ads.go('rounds'); } });
       });
     });
     el.querySelectorAll('[data-round-del2]').forEach(function (b) {
