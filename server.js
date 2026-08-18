@@ -60,6 +60,30 @@ var GEMINI_IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || 'gemini-2.5-flash-ima
 var GEMINI_API_VERSION = process.env.GEMINI_API_VERSION || 'v1beta';
 var STORE_FILE = path.join(ROOT, 'data', 'store.json');
 
+// --- Instagram direct posting (Instagram API with Instagram Login) ----------
+// The token is an Instagram User access token from the user's Meta developer
+// app ("API setup with Instagram business login"). Long-lived (60 days) and
+// auto-refreshed below. No Facebook Page or Business Manager involved.
+var IG_ENV_TOKEN = process.env.IG_ACCESS_TOKEN || '';
+var IG_TOKEN_FILE = path.join(__dirname, 'data', 'meta.key');
+var igRuntimeToken = '';
+var igTokenPersisted = false;
+if (!IG_ENV_TOKEN) {
+  try { var _igt = fs.readFileSync(IG_TOKEN_FILE, 'utf8').trim(); if (_igt) { igRuntimeToken = _igt; igTokenPersisted = true; } } catch (e) {}
+}
+function effectiveIgToken() { return IG_ENV_TOKEN || igRuntimeToken; }
+function igTokenSource() { return IG_ENV_TOKEN ? 'env' : (igRuntimeToken ? (igTokenPersisted ? 'saved' : 'session') : 'none'); }
+var igLastError = '';
+var igUser = null;                 // { id, username } from the last verify
+var IG_GRAPH_HOST = 'graph.instagram.com';
+var IG_API_VERSION = process.env.IG_API_VERSION || 'v26.0';
+// Meta's servers fetch staged media from here; must be publicly reachable
+var PUBLIC_BASE = (process.env.ADS_PUBLIC_BASE || 'https://sm.partisans.ca').replace(/\/+$/, '');
+var PUB_DIR = path.join(ROOT, 'data', 'pub');
+// in-flight/finished publish jobs, keyed by the client's idempotency id
+// (adKey+round) so retries can never double-post. Swept hourly below.
+var igJobs = {};
+
 // A project "has content" when it holds real work (saved ads, landing pages,
 // a dossier, generated images, or research). Used to guard against a wipe: a
 // fresh/empty browser state must never overwrite projects full of work on disk.
@@ -156,9 +180,15 @@ function serveStatic(req, res, pathname) {
   var rel = safeDecode(pathname);
   if (rel == null) return send(res, 400, 'Bad request');
   if (rel === '/' || rel === '') rel = '/index.html';
-  // prevent path traversal
+  // prevent path traversal (compare against ROOT + separator so a sibling
+  // directory like ads-hub-backup can never prefix-match)
   var filePath = path.normalize(path.join(ROOT, rel));
-  if (filePath.indexOf(ROOT) !== 0) { send(res, 403, 'Forbidden'); return; }
+  if (filePath !== ROOT && filePath.indexOf(ROOT + path.sep) !== 0) { send(res, 403, 'Forbidden'); return; }
+  // secrets and user data are never static assets: data/ holds the API keys,
+  // the Instagram token and store.json; .git would leak the repo. Anything in
+  // there is reachable only via its dedicated route (/pub/, /pfiles/, APIs).
+  var relNorm = filePath.slice(ROOT.length).replace(/\\/g, '/');
+  if (/^\/(data|\.git)(\/|$)/.test(relNorm) || /\.key$/i.test(relNorm)) { send(res, 404, 'Not found'); return; }
 
   fs.stat(filePath, function (err, stat) {
     if (err || !stat.isFile()) {
@@ -189,7 +219,9 @@ function safeSeg(s) { return String(s || '').replace(/[^a-zA-Z0-9._-]/g, '_').re
 
 // Serve a stored project file with Range support (video seeking needs 206s).
 function serveProjectFile(req, res, pid, name) {
-  var fp = path.join(PROJECTS_DIR, safeSeg(pid), 'files', safeSeg(name));
+  return serveFileRange(req, res, path.join(PROJECTS_DIR, safeSeg(pid), 'files', safeSeg(name)));
+}
+function serveFileRange(req, res, fp) {
   fs.stat(fp, function (err, stat) {
     if (err || !stat.isFile()) return send(res, 404, 'Not found');
     var type = MIME[path.extname(fp).toLowerCase()] || 'application/octet-stream';
@@ -1008,6 +1040,121 @@ function geminiVerify(cb) {
   req.end();
 }
 
+/* ---- Instagram Graph API (Instagram-Login flavor, graph.instagram.com) ---- */
+function igRequest(method, apiPath, params, cb, timeoutMs) {
+  var qs = Object.keys(params || {}).map(function (k) {
+    return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]);
+  }).join('&');
+  var p = apiPath.indexOf('/') === 0 ? '/' + IG_API_VERSION + apiPath : '/' + apiPath;   // 'refresh_access_token' is unversioned
+  var body = null;
+  if (method === 'GET') { if (qs) p += '?' + qs; } else body = qs;
+  var called = false;
+  function done(err, j) { if (called) return; called = true; cb(err, j); }   // end + a late socket error must not fire cb twice
+  var rq = https.request({
+    hostname: IG_GRAPH_HOST, path: p, method: method,
+    headers: method === 'GET' ? {} : { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body || '') }
+  }, function (resp) {
+    var chunks = []; resp.on('data', function (c) { chunks.push(c); });
+    resp.on('end', function () {
+      var txt = Buffer.concat(chunks).toString('utf8');
+      var j = null; try { j = JSON.parse(txt); } catch (e) {}
+      if (resp.statusCode >= 200 && resp.statusCode < 300 && j) return done(null, j);
+      var msg = 'Instagram ' + resp.statusCode;
+      if (j && j.error) msg += ': ' + (j.error.error_user_msg || j.error.message || JSON.stringify(j.error).slice(0, 200));
+      else if (txt) msg += ': ' + txt.slice(0, 200);
+      done(new Error(msg));
+    });
+  });
+  rq.on('error', function (e) { done(new Error('Instagram request failed: ' + e.message)); });
+  rq.setTimeout(timeoutMs || 60000, function () { rq.destroy(new Error('Instagram request timed out')); });
+  if (body) rq.write(body);
+  rq.end();
+}
+
+// Free check: /me proves the token reaches the API and names the account.
+function igVerify(cb) {
+  var tok = effectiveIgToken();
+  if (!tok) return cb(new Error('no_ig_token'));
+  igRequest('GET', '/me', { fields: 'user_id,username,account_type', access_token: tok }, function (err, j) {
+    if (err) { igLastError = err.message; igUser = null; return cb(err); }
+    igUser = { id: String(j.user_id || j.id || ''), username: j.username || '' };
+    igLastError = '';
+    cb(null, igUser);
+  });
+}
+
+// Long-lived Instagram tokens expire after 60 days; a daily refresh keeps the
+// saved one alive forever. (Refreshing a token younger than 24h is rejected by
+// Meta — that error is expected and harmless.)
+function igRefresh() {
+  var tok = effectiveIgToken();
+  if (!tok || IG_ENV_TOKEN) return;
+  igRequest('GET', 'refresh_access_token', { grant_type: 'ig_refresh_token', access_token: tok }, function (err, j) {
+    if (err || !j.access_token) {
+      if (err && !/24 hours|too soon/i.test(err.message)) console.log('[ads-hub] IG token refresh: ' + (err ? err.message : 'no token in response'));
+      return;
+    }
+    igRuntimeToken = j.access_token;
+    fs.mkdir(path.dirname(IG_TOKEN_FILE), { recursive: true }, function () {
+      fs.writeFile(IG_TOKEN_FILE, j.access_token, function (werr) {
+        igTokenPersisted = !werr;
+        console.log('[ads-hub] IG token refreshed (expires in ' + Math.round((j.expires_in || 0) / 86400) + 'd)');
+      });
+    });
+  });
+}
+
+// Publish flow: create a media container, wait for Meta to ingest the media
+// (it cURLs the /pub/ URL), then publish. Images are usually ready in seconds;
+// Reels can take a couple of minutes to process.
+function igPublish(kind, publicURL, caption, cb) {
+  var tok = effectiveIgToken();
+  if (!tok) return cb(new Error('no_ig_token'));
+  // publish against the VERIFIED IG user id — /me/media is not documented for
+  // this flavor. igUser is set by boot/save verify; re-verify lazily if the
+  // process restarted without one.
+  if (!igUser || !igUser.id) {
+    return igVerify(function (verr) {
+      if (verr) return cb(verr);
+      igPublish(kind, publicURL, caption, cb);
+    });
+  }
+  var params = kind === 'video'
+    ? { media_type: 'REELS', video_url: publicURL, caption: caption || '', share_to_feed: 'true', access_token: tok }
+    : { image_url: publicURL, caption: caption || '', access_token: tok };
+  igRequest('POST', '/' + igUser.id + '/media', params, function (err, j) {
+    if (err) return cb(err);
+    var containerId = j.id;
+    if (!containerId) return cb(new Error('Instagram returned no container id'));
+    var pollMs = kind === 'video' ? 10000 : 5000;
+    var tries = 0, maxTries = kind === 'video' ? 36 : 12;   // 6 min / 60s
+    function publishNow() {
+      igRequest('POST', '/me/media_publish', { creation_id: containerId, access_token: tok }, function (uerr, uj) {
+        if (uerr) return cb(uerr);
+        var mediaId = uj.id;
+        igRequest('GET', '/' + mediaId, { fields: 'permalink', access_token: tok }, function (lerr, lj) {
+          cb(null, { mediaId: String(mediaId), permalink: (lj && lj.permalink) || '' });
+        });
+      });
+    }
+    (function poll() {
+      igRequest('GET', '/' + containerId, { fields: 'status_code,status', access_token: tok }, function (perr, pj) {
+        // some image containers don't expose status — just publish them
+        if (perr) { if (kind !== 'video') return publishNow(); return cb(perr); }
+        var sc = pj.status_code || '';
+        if (sc === 'FINISHED') return publishNow();
+        if (sc === 'ERROR' || sc === 'EXPIRED') {
+          return cb(new Error('Instagram could not process the media (' + sc + (pj.status ? ': ' + pj.status : '') + '). Check the media specs — images must be JPEG, reels MP4 (H.264).'));
+        }
+        // publish was never called on this path — the container just expires,
+        // so the post did NOT go out and a retry is safe
+        if (++tries >= maxTries) return cb(new Error('Instagram never finished processing the media — the post did NOT go out. Retrying is safe.'));
+        setTimeout(poll, pollMs);
+      });
+    })();
+  });
+}
+
 /* ---- Transcription proxy (local transcribe-hub on :3004) ------------------ */
 // The uploaded project video is already on disk — stream it to the local
 // whisper tool and let the client poll for the transcript. Nothing leaves
@@ -1429,7 +1576,9 @@ function hostOf(u) { try { return new URL(String(u)).hostname.slice(0, 80); } ca
 // itself observed; left-most entries are client-spoofable). Local loopback
 // mode never trusts the header.
 function clientIP(req) {
-  if (TRACK_ONLY) {
+  // ADS_BEHIND_PROXY: the archi docker instance sits behind ads_gate +
+  // cloudflared — every socket is the gate, so trust XFF there too
+  if (TRACK_ONLY || process.env.ADS_BEHIND_PROXY) {
     var xff = String(req.headers['x-forwarded-for'] || '');
     if (xff) { var hops = xff.split(',').map(function (s) { return s.trim(); }).filter(Boolean); if (hops.length) return hops[hops.length - 1]; }
   }
@@ -1614,6 +1763,17 @@ function handleTracking(req, res, pathname, parsed) {
       });
     });
     return true;
+  }
+
+  // staged ad media for Instagram publishing — Meta's servers fetch these
+  // (public by design, like /a/ and /p/; filenames are unguessable time-ids)
+  if (pathname.indexOf('/pub/') === 0 && req.method === 'GET') {
+    if (!rateOK(req, 'pub', 300)) return send(res, 429, 'Too many requests'), true;
+    var pubName = safeDecode(pathname.slice(5));
+    if (pubName == null || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$/.test(pubName) || pubName.indexOf('..') >= 0) {
+      return send(res, 404, 'Not found'), true;
+    }
+    return serveFileRange(req, res, path.join(PUB_DIR, pubName)), true;
   }
 
   // beacon ingest — tiny, anonymous, rate-limited
@@ -1814,6 +1974,139 @@ var server = http.createServer(function (req, res) {
       });
     });
   }
+  // --- Instagram connection: status + set/clear token + verify --------------
+  if (pathname === '/api/meta/status' && req.method === 'GET') {
+    return sendJSON(res, 200, {
+      enabled: !!effectiveIgToken(), source: igTokenSource(),
+      username: (igUser && igUser.username) || '',
+      ok: !igLastError, error: igLastError || '', publicBase: PUBLIC_BASE
+    });
+  }
+  if (pathname === '/api/meta/verify' && req.method === 'POST') {
+    if (!requireAppHeader(req, res)) return;
+    if (!effectiveIgToken()) return sendJSON(res, 200, { enabled: false, ok: false, error: 'No Instagram token set.' });
+    return igVerify(function (verr, u) {
+      sendJSON(res, 200, { enabled: true, ok: !verr, username: (u && u.username) || '', error: verr ? verr.message : '' });
+    });
+  }
+  if (pathname === '/api/meta/key' && req.method === 'POST') {
+    if (!requireAppHeader(req, res)) return;
+    return readBody(req, function (raw, overSize) {
+      if (raw == null) return sendJSON(res, 413, { error: 'too_large' });   // an oversized body must NOT read as "clear the token"
+      var input; try { input = raw ? JSON.parse(raw) : {}; } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
+      if (IG_ENV_TOKEN) return sendJSON(res, 200, { enabled: true, source: 'env', note: 'A token is already set via IG_ACCESS_TOKEN.' });
+      var k = String(input.key || '').trim();
+      if (k && (k.length < 30 || /\s/.test(k))) return sendJSON(res, 400, { error: 'bad_key', message: 'That doesn’t look like an Instagram access token.' });
+      igRuntimeToken = k;
+      if (!k) { igTokenPersisted = false; igLastError = ''; igUser = null; return fs.unlink(IG_TOKEN_FILE, function () { sendJSON(res, 200, { enabled: false, source: 'none' }); }); }
+      igLastError = '';
+      return fs.mkdir(path.dirname(IG_TOKEN_FILE), { recursive: true }, function () {
+        fs.writeFile(IG_TOKEN_FILE, k, function (werr) {
+          igTokenPersisted = !werr;
+          // verify immediately so the user learns right away if the token is bad
+          igVerify(function (verr, u) {
+            sendJSON(res, 200, { enabled: true, source: igTokenSource(), persisted: !werr, ok: !verr, username: (u && u.username) || '', error: verr ? verr.message : '' });
+          });
+        });
+      });
+    });
+  }
+  // Stage a rendered creative at a public URL so Meta's servers can fetch it.
+  if (pathname === '/api/meta/stage' && req.method === 'POST') {
+    if (!requireAppHeader(req, res)) return;
+    if (!rateOK(req, 'stage', 12)) return sendJSON(res, 429, { error: 'rate_limited' });
+    var stName = safeSeg(parsed.query.name).slice(0, 80);   // /pub/ route caps full names at 120 chars incl. the prefix
+    if (!stName || stName === '_') return sendJSON(res, 400, { error: 'bad_args', message: 'name is required' });
+    stName = Date.now().toString(36) + crypto.randomBytes(6).toString('hex') + '-' + stName;
+    return fs.mkdir(PUB_DIR, { recursive: true }, function (mkErr) {
+      if (mkErr) return sendJSON(res, 500, { error: 'mkdir', message: String(mkErr.message) });
+      // staged files are transient (Meta fetches within minutes) — a tight
+      // aggregate quota keeps a bug or abuse from filling the disk
+      fs.readdir(PUB_DIR, function (rdErr, names) {
+        if (!rdErr && names.length > 80) return sendJSON(res, 507, { error: 'pub_full', message: 'Too many staged files — try again in an hour (they clean up automatically).' });
+        var stPath = path.join(PUB_DIR, stName);
+        var stOut = fs.createWriteStream(stPath);
+        var stSize = 0, stAborted = false;
+        req.on('data', function (c) {
+          stSize += c.length;
+          if (stSize > 310 * 1024 * 1024) { stAborted = true; req.destroy(); stOut.destroy(); fs.unlink(stPath, function () {}); }
+        });
+        req.pipe(stOut);
+        stOut.on('finish', function () {
+          if (stAborted) return;
+          sendJSON(res, 200, { ok: true, url: '/pub/' + stName, publicURL: PUBLIC_BASE + '/pub/' + stName, bytes: stSize });
+        });
+        stOut.on('error', function (e) { if (!stAborted) sendJSON(res, 500, { error: 'write', message: String(e.message) }); });
+        req.on('error', function () { stOut.destroy(); fs.unlink(stPath, function () {}); });
+      });
+    });
+  }
+  // Publish one staged creative to the connected Instagram account.
+  // ASYNC: reels take minutes to process, far past Cloudflare's ~100s proxy
+  // limit — so this returns a job id immediately and the client polls
+  // /api/meta/post-status. Jobs are idempotent on input.idem (adKey+round):
+  // a retry while one is running (or after success) returns the SAME job,
+  // so a proxy-killed response can never cause a duplicate Instagram post.
+  if (pathname === '/api/meta/post' && req.method === 'POST') {
+    if (!requireAppHeader(req, res)) return;
+    if (!effectiveIgToken()) return sendJSON(res, 501, { error: 'no_ig_token', message: 'Connect Instagram in Brand Kit first.' });
+    return readBody(req, function (raw, overSize) {
+      if (raw == null) return sendJSON(res, 413, { error: 'too_large' });
+      var input; try { input = raw ? JSON.parse(raw) : {}; } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
+      var kind = input.kind === 'video' ? 'video' : 'image';
+      var rel = String(input.url || '');
+      if (rel.indexOf('/pub/') !== 0 || rel.indexOf('..') >= 0) return sendJSON(res, 400, { error: 'bad_url', message: 'url must be a staged /pub/ path' });
+      var caption = String(input.caption || '').slice(0, 2200);
+      var idem = String(input.idem || '').slice(0, 120);
+      if (idem && igJobs[idem] && igJobs[idem].state !== 'error') {
+        return sendJSON(res, 200, { ok: true, job: idem, state: igJobs[idem].state });
+      }
+      var jobId = idem || ('job-' + Date.now().toString(36) + crypto.randomBytes(4).toString('hex'));
+      igJobs[jobId] = { state: 'running', at: Date.now() };
+      igPublish(kind, PUBLIC_BASE + rel, caption, function (err, out) {
+        var j = igJobs[jobId]; if (!j) return;
+        if (err) { j.state = 'error'; j.error = err.message; }
+        else {
+          j.state = 'done'; j.mediaId = out.mediaId; j.permalink = out.permalink;
+          fs.unlink(path.join(PUB_DIR, rel.slice(5)), function () {});   // Meta has ingested it
+        }
+      });
+      sendJSON(res, 200, { ok: true, job: jobId, state: 'running' });
+    }, 64 * 1024);
+  }
+  if (pathname === '/api/meta/post-status' && req.method === 'GET') {
+    if (!requireAppHeader(req, res)) return;
+    var jq = String(parsed.query.job || '').slice(0, 120);
+    var job = igJobs[jq];
+    if (!job) return sendJSON(res, 404, { error: 'unknown_job' });
+    return sendJSON(res, 200, { ok: true, state: job.state, mediaId: job.mediaId || '', permalink: job.permalink || '', error: job.error || '' });
+  }
+  // Per-post insights for published media ids.
+  if (pathname === '/api/meta/insights' && req.method === 'POST') {
+    if (!requireAppHeader(req, res)) return;
+    if (!effectiveIgToken()) return sendJSON(res, 501, { error: 'no_ig_token' });
+    return readBody(req, function (raw) {
+      var input; try { input = raw ? JSON.parse(raw) : {}; } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
+      var ids = (Array.isArray(input.ids) ? input.ids : []).slice(0, 60).map(String);
+      if (!ids.length) return sendJSON(res, 400, { error: 'bad_args', message: 'ids required' });
+      var tok = effectiveIgToken(), byId = {}, i = 0;
+      (function next() {
+        if (i >= ids.length) return sendJSON(res, 200, { ok: true, byId: byId, at: new Date().toISOString() });
+        var id = ids[i++];
+        igRequest('GET', '/' + id + '/insights', { metric: 'views,reach,likes,comments,saved,shares,total_interactions', access_token: tok }, function (err, j) {
+          if (err) { byId[id] = { error: err.message.slice(0, 200) }; return next(); }
+          var m = {};
+          (j.data || []).forEach(function (row) {
+            var v = row.values && row.values[0] ? row.values[0].value : null;
+            if (row.name && v != null) m[row.name] = v;
+          });
+          byId[id] = m;
+          next();
+        });
+      })();
+    }, 64 * 1024);
+  }
+
   // --- Render ONE image with Nano Banana from a concept prompt (+ references) ---
   if (pathname === '/api/ai/genimage' && req.method === 'POST') {
     if (!effectiveGeminiKey()) return sendJSON(res, 501, { error: 'no_gemini_key', message: 'Add your Nano Banana (Gemini) API key in Brand Kit to render real images.' });
@@ -2397,4 +2690,36 @@ server.listen(PORT, '127.0.0.1', function () {
   if (effectiveGeminiKey()) geminiVerify(function (verr) {
     console.log('  Image gen (Nano Banana): ' + (verr ? 'KEY BLOCKED — ' + verr.message : 'key OK (' + GEMINI_IMAGE_MODEL + ')') + '\n');
   });
+  // Instagram: verify the saved token on boot, keep it fresh daily, and sweep
+  // staged /pub/ media once Meta no longer needs it (>14 days old).
+  if (effectiveIgToken()) {
+    igVerify(function (verr, u) {
+      console.log('  Instagram: ' + (verr ? 'TOKEN PROBLEM — ' + verr.message : 'connected as @' + u.username) + '\n');
+    });
+    setTimeout(igRefresh, 30 * 1000);
+  }
+  // hourly: sweep stale staged media (Meta ingests within minutes — 48h is a
+  // generous backstop; successful publishes unlink immediately), GC old
+  // publish jobs, and once a day refresh the Instagram token
+  var lastIgRefresh = 0;
+  function pubSweep() {
+    fs.readdir(PUB_DIR, function (err, names) {
+      if (err) return;
+      var cutoff = Date.now() - 48 * 3600 * 1000;
+      names.forEach(function (n) {
+        var fp = path.join(PUB_DIR, n);
+        fs.stat(fp, function (serr, st) {
+          if (!serr && st.isFile() && st.mtimeMs < cutoff) fs.unlink(fp, function () {});
+        });
+      });
+    });
+    Object.keys(igJobs).forEach(function (k) {
+      if (Date.now() - igJobs[k].at > 3600 * 1000) delete igJobs[k];
+    });
+  }
+  pubSweep();
+  setInterval(function () {
+    pubSweep();
+    if (effectiveIgToken() && Date.now() - lastIgRefresh > 23 * 3600 * 1000) { lastIgRefresh = Date.now(); igRefresh(); }
+  }, 3600 * 1000);
 });

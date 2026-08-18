@@ -335,9 +335,21 @@ window.Ads = window.Ads || {};
   // scroll, and click-throughs to the main site — plus spend the user enters,
   // giving cost-per-click and cost-per-site-visit, and an ad-vs-ad leaderboard.
   var trackUI = { sort: 'clicks', dir: -1 };
+  // API base: where THIS browser reaches the collector (same origin via the
+  // tunnel or the gate — the public rewrite below would break both CORS and
+  // the gate for /api/track/stats).
   function trackBase() {
     var t = store.getSettings().tracking || {};
     return String(t.url || window.location.origin).replace(/\/+$/, '');
+  }
+  // Link base: for URLs that LEAVE this machine (Instagram captions, copy-link
+  // buttons, CSVs) — the SSH-tunnel origin localhost:3003 means nothing to the
+  // outside world, so those always use the public address.
+  function publicLinkBase() {
+    var t = store.getSettings().tracking || {};
+    if (t.url) return String(t.url).replace(/\/+$/, '');
+    if (/^https?:\/\/(localhost|127\.)/i.test(window.location.origin)) return 'https://sm.partisans.ca';
+    return String(window.location.origin).replace(/\/+$/, '');
   }
   function syncTracking(cb) {
     var base = trackBase();
@@ -769,7 +781,7 @@ window.Ads = window.Ads || {};
   function renderFolderPage(el, p) {
     var rounds = projRounds(p), byKey = savedByKey(p), lk = landingKeys(p), snap = snapAds();
     var t = store.getTracking(), spend = t.spend || {};
-    var base = trackBase();
+    var base = publicLinkBase();   // copy-link buttons produce URLs that leave this machine
     function stat(v, l) { return '<span class="rndp-stat"><b>' + v + '</b><span>' + l + '</span></span>'; }
     var head = '<div class="view-section"><div class="btn-row">' +
       '<button class="btn is-ghost is-sm" id="rndf-back">← All folders</button>' +
@@ -785,11 +797,28 @@ window.Ads = window.Ads || {};
         var sp = spend[k] != null ? util.num(spend[k]) : null;
         if (sp != null) { tot.spend += sp; tot.spendSet = true; }
         var outRate = st.views ? Math.round((st.outs || 0) / st.views * 100) : null;
+        var ig = (r.igPosts || {})[k];
+        var igm = ig && ig.id ? (t.ig && t.ig.byId && t.ig.byId[ig.id]) : null;
+        var igLine = '';
+        if (ig) {
+          var bits = [];
+          if (igm && !igm.error) {
+            if (igm.views != null) bits.push(igm.views + ' views');
+            if (igm.reach != null) bits.push(igm.reach + ' reach');
+            if (igm.likes != null) bits.push('♥ ' + igm.likes);
+            if (igm.comments != null) bits.push('💬 ' + igm.comments);
+            if (igm.saved != null) bits.push('🔖 ' + igm.saved);
+          }
+          igLine = '<div class="rndp-ig">📸 ' +
+            (ig.permalink ? '<a href="' + esc(ig.permalink) + '" target="_blank" rel="noopener">on Instagram</a>' : 'posted') +
+            (bits.length ? ' · ' + bits.join(' · ') : ' · stats arrive on next sync') + '</div>';
+        }
         return '<div class="rndp-card">' +
           '<div class="rndp-thumb cr-stage-scaler" data-rt2="' + esc(k) + '"></div>' +
           '<div class="rndp-body">' +
             '<div class="rndp-name"><strong>' + esc(a ? (a.angle || a.name || k) : (k + ' (no longer saved)')) + '</strong>' +
               '<span class="u-faint"> · ' + (a ? (a.kind === 'video' ? 'video' : 'post') : '?') + (lk[k] ? '' : ' · ⚠ no landing page') + '</span></div>' +
+            igLine +
             '<div class="rndp-stats">' +
               stat(st.clicks || 0, 'clicks') + stat(st.views || 0, 'visits') +
               stat(fmtDur(st.avgSeconds || 0), 'avg time') +
@@ -825,7 +854,24 @@ window.Ads = window.Ads || {};
       syncBtn.disabled = true; syncBtn.innerHTML = '<span class="spinner"></span> Syncing…';
       syncTracking(function (err) {
         if (err) Ads.toast('Sync failed: ' + err.message, true);
-        Ads.go('rounds');
+        // also pull Instagram per-post insights for everything this project posted
+        var ids = [];
+        projRounds(store.getProject(p.id) || p).forEach(function (r2) {
+          Object.keys(r2.igPosts || {}).forEach(function (k2) {
+            var g = r2.igPosts[k2]; if (g && g.id) ids.push(g.id);
+          });
+        });
+        if (!ids.length) return Ads.go('rounds');
+        ai().metaInsights(ids)
+          .then(function (resp) {
+            // keep previous good numbers: a transiently failing id must not
+            // overwrite real stats with an error entry
+            var clean = {}, by = resp.byId || {};
+            Object.keys(by).forEach(function (id) { if (by[id] && !by[id].error) clean[id] = by[id]; });
+            if (Object.keys(clean).length) store.setTrackIG(clean);
+          })
+          .catch(function () {})   // not connected / offline — collector stats still synced
+          .then(function () { Ads.go('rounds'); });
       });
     });
     el.querySelectorAll('[data-copy]').forEach(function (b) {
@@ -1024,6 +1070,22 @@ window.Ads = window.Ads || {};
     });
     var post = box.querySelector('#pp-post');
     if (post) post.addEventListener('click', function () {
+      // connected → real posting flow; not yet → the one-time setup steps.
+      // A stale error flag gets one live re-check before blocking the flow.
+      ai().metaStatus().then(function (st) {
+        if (st && st.enabled && st.ok !== false) return openIgPostFlow(p.id, r.id);
+        if (st && st.enabled) {
+          return ai().metaVerify().then(function (v) {
+            if (v && v.ok) return openIgPostFlow(p.id, r.id);
+            Ads.toast('Instagram token problem: ' + ((v && v.error) || 'check Brand Kit'), true);
+            igSetupModal(p, r);
+          });
+        }
+        igSetupModal(p, r);
+      });
+    });
+  }
+  function igSetupModal(p, r) {
       Ads.modal({
         title: 'Connect Instagram to post directly', wide: true,
         body: '<p class="u-muted">One-time setup — <strong>no Facebook Page, no Business Manager</strong>. Ads Hub then publishes this round straight to your Instagram:</p>' +
@@ -1031,7 +1093,7 @@ window.Ads = window.Ads || {};
             '<li>In the Instagram app: switch the account to a <strong>professional account</strong> (Settings → Account type)</li>' +
             '<li>At <strong>developers.facebook.com</strong> (free developer login): create an app → add the <strong>Instagram</strong> product → “API setup with Instagram business login”</li>' +
             '<li>Log in there with the Instagram account and approve <strong>instagram_business_basic</strong>, <strong>instagram_business_content_publish</strong>, <strong>instagram_business_manage_insights</strong></li>' +
-            '<li>Copy the access token it shows and tell Claude it’s ready — posting + per-post insights get wired here</li>' +
+            '<li>Copy the access token it shows and paste it in <strong>Brand Kit → Instagram — direct posting</strong> — this button then publishes for real</li>' +
           '</ol>' +
           '<p class="u-muted">Budget note: this path publishes the posts; putting money behind one is a manual <strong>Boost</strong> tap in the Instagram app. Fully automatic paid campaigns (spend + CPC syncing back here) are a later upgrade — that’s the only part that needs Meta Business Manager and a (never-used) Facebook Page.</p>' +
           '<p class="u-muted">Until then, post manually: each ad’s platform links are one click away below.</p>' +
@@ -1043,6 +1105,138 @@ window.Ads = window.Ads || {};
         },
         onAction: function (act) { if (act === 'cancel') Ads.closeModal(); }
       });
+  }
+
+  /* ---- Direct Instagram posting ------------------------------------------ */
+  // Instagram feed images must be JPEG (no alpha) 320–1440px wide, aspect
+  // 4:5 … 1.91:1 — pad out-of-range renders onto a dark canvas instead of
+  // letting Meta reject them.
+  function creativeToJpeg(pngBlob) {
+    return new Promise(function (resolve, reject) {
+      var url = URL.createObjectURL(pngBlob);
+      var img = new Image();
+      img.onload = function () {
+        URL.revokeObjectURL(url);
+        var w = Math.min(1440, img.naturalWidth || 1080);
+        var h = Math.round((img.naturalHeight || 1080) * w / (img.naturalWidth || 1080));
+        var cw = w, ch = h;
+        if (ch / cw > 1.25) cw = Math.ceil(ch / 1.25);        // too tall (e.g. 9:16 story) → pad sides to 4:5
+        if (cw / ch > 1.91) ch = Math.ceil(cw / 1.91);        // too wide → pad top/bottom
+        var c = document.createElement('canvas'); c.width = cw; c.height = ch;
+        var x = c.getContext('2d');
+        x.fillStyle = '#0a0a0c'; x.fillRect(0, 0, cw, ch);
+        x.drawImage(img, Math.round((cw - w) / 2), Math.round((ch - h) / 2), w, h);
+        c.toBlob(function (b) { b ? resolve(b) : reject(new Error('JPEG conversion failed')); }, 'image/jpeg', 0.92);
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); reject(new Error('Could not read the rendered image')); };
+      img.src = url;
+    });
+  }
+  function igCaptionFor(spec) {
+    var cap = String(spec.caption || ((spec.headlineStart || '') + ' ' + (spec.headlineHighlight || '')).trim() || '');
+    var link = publicLinkBase() + '/a/' + spec.adKey + '?s=ig';
+    // Instagram caps captions at 2200 chars — trim the TEXT, never the link
+    var room = 2200 - link.length - 2;
+    if (cap.length > room) cap = cap.slice(0, Math.max(0, room - 1)) + '…';
+    return (cap ? cap + '\n\n' : '') + link;
+  }
+  function openIgPostFlow(pid, rid) {
+    var p = store.getProject(pid); if (!p) return;
+    var r = projRounds(p).filter(function (x) { return x.id === rid; })[0]; if (!r) return;
+    var byKey = savedByKey(p);
+    var items = r.adKeys.map(function (k) {
+      var a = byKey[k]; if (!a) return null;
+      return { key: k, spec: a, posted: !!((r.igPosts || {})[k]) };
+    }).filter(Boolean);
+    var fresh = items.filter(function (it) { return !it.posted; });
+    var rows = items.map(function (it) {
+      return '<div class="igpost-row" data-igrow="' + esc(it.key) + '">' +
+        '<div class="igpost-row-thumb cr-stage-scaler" data-igt="' + esc(it.key) + '"></div>' +
+        '<div class="igpost-row-body">' +
+          '<strong>' + esc(it.spec.angle || it.spec.name || it.key) + '</strong>' +
+          '<span class="u-faint">' + (it.spec.kind === 'video' ? 'publishes as a Reel' : 'publishes as a feed photo') + '</span>' +
+          '<div class="igpost-cap">' + esc(igCaptionFor(it.spec).slice(0, 220)) + '</div>' +
+        '</div>' +
+        '<div class="igpost-row-state" data-igstate="' + esc(it.key) + '">' + (it.posted ? '✓ already posted — skipped' : 'ready') + '</div>' +
+      '</div>';
+    }).join('');
+    Ads.modal({
+      title: '🚀 Post this round to Instagram', wide: true,
+      body: '<p class="u-muted">Each ad publishes to your Instagram with its tracked link in the caption (links in captions aren’t tappable on Instagram — the click data mainly flows once you Boost, or via link-in-bio; the post itself still lands the message). Videos render before uploading — leave this open until every row shows ✓.</p>' +
+        '<div class="igpost-list">' + rows + '</div>' +
+        '<div class="gh-status" id="igpost-status"></div>',
+      foot: [
+        { label: 'Post ' + fresh.length + ' ad' + (fresh.length === 1 ? '' : 's') + ' now', act: 'go', primary: true },
+        { label: 'Cancel', act: 'cancel', ghost: true }
+      ],
+      onMount: function (m) {
+        m.querySelectorAll('[data-igt]').forEach(function (n) {
+          var it = items.filter(function (x) { return x.key === n.getAttribute('data-igt'); })[0];
+          if (it) { try { mountThumbFitted(n, it.spec, 90, 110); } catch (e) {} }
+        });
+      },
+      onAction: function (act, m) {
+        if (act === 'cancel') return Ads.closeModal();
+        if (act !== 'go') return;
+        // recompute the pending set from the STORE — never the stale closure —
+        // so pressing the button again can only ever post what isn't live yet
+        var pNow = store.getProject(pid);
+        var rNow = pNow && projRounds(pNow).filter(function (x) { return x.id === rid; })[0];
+        var pending = items.filter(function (it) { return !((rNow && rNow.igPosts || {})[it.key]); });
+        if (!pending.length) { Ads.toast('Everything in this round is already posted'); return Ads.closeModal(); }
+        var goBtn = m.querySelector('[data-mact="go"]');
+        if (goBtn) { goBtn.disabled = true; goBtn.innerHTML = '<span class="spinner"></span> Posting…'; }
+        var status = m.querySelector('#igpost-status');
+        var done = 0, failed = 0, i = 0;
+        function setRow(key, html) { var el2 = m.querySelector('[data-igstate="' + key + '"]'); if (el2) el2.innerHTML = html; }
+        function finish() {
+          if (status) status.textContent = done + ' posted' + (failed ? ', ' + failed + ' failed — press the button again to retry just those' : ' — all live on Instagram');
+          if (goBtn) {
+            goBtn.disabled = false;
+            if (failed) { goBtn.textContent = 'Retry failed'; }
+            else { goBtn.textContent = 'Done'; goBtn.setAttribute('data-mact', 'cancel'); }   // a re-click now just closes
+          }
+          Ads.toast(done + ' ad' + (done === 1 ? '' : 's') + ' posted to Instagram' + (failed ? ' · ' + failed + ' failed' : ''), !!failed && !done);
+          Ads.go('rounds');
+        }
+        (function next() {
+          if (i >= pending.length) return finish();
+          var it = pending[i++];
+          var isVideo = it.spec.kind === 'video';
+          setRow(it.key, '<span class="spinner"></span> rendering…');
+          var renderP = isVideo
+            ? Ads.video.exportVideo(it.spec).then(function (rr) {
+                if (rr.ext !== 'mp4') throw new Error('this browser exported ' + rr.ext.toUpperCase() + ' — Instagram needs MP4 (use Chrome)');
+                return { blob: rr.blob, name: it.key + '.mp4', kind: 'video' };
+              })
+            : render.exportPNG(it.spec).then(creativeToJpeg).then(function (b) {
+                return { blob: b, name: it.key + '.jpg', kind: 'image' };
+              });
+          renderP.then(function (media) {
+            setRow(it.key, '<span class="spinner"></span> uploading…');
+            return ai().metaStage(media.blob, media.name).then(function (staged) {
+              setRow(it.key, '<span class="spinner"></span> publishing' + (media.kind === 'video' ? ' (reels take a minute)…' : '…'));
+              return ai().metaPost({ kind: media.kind, url: staged.url, caption: igCaptionFor(it.spec), idem: rid + ':' + it.key });
+            });
+          }).then(function (out) {
+            done++;
+            setRow(it.key, '✓ live' + (out.permalink ? ' — <a href="' + esc(out.permalink) + '" target="_blank" rel="noopener">open</a>' : ''));
+            // persist on the ROUND, re-read fresh so parallel edits aren’t lost
+            var p2 = store.getProject(pid);
+            var r2 = p2 && projRounds(p2).filter(function (x) { return x.id === rid; })[0];
+            if (r2) {
+              var posts = Object.assign({}, r2.igPosts || {});
+              posts[it.key] = { id: out.mediaId, permalink: out.permalink || '', at: util.nowISO(), kind: isVideo ? 'video' : 'image' };
+              updateRound(pid, rid, { igPosts: posts });
+            }
+            next();
+          }).catch(function (e) {
+            failed++;
+            setRow(it.key, '<span style="color:var(--bad,#e5704f)">✗ ' + esc((e && e.message || 'failed').slice(0, 120)) + '</span>');
+            next();
+          });
+        })();
+      }
     });
   }
 
@@ -1114,7 +1308,7 @@ window.Ads = window.Ads || {};
     var p = store.getProject(pid); if (!p) return;
     var r = projRounds(p).filter(function (x) { return x.id === roundId; })[0]; if (!r) return;
     var byKey = savedByKey(p), lk = landingKeys(p), snap = snapAds();
-    var base = trackBase();
+    var base = publicLinkBase();   // these links go ON posted ads — public address
     var tot = { clicks: 0, views: 0, outs: 0 };
     var rows = r.adKeys.map(function (k) {
       var a = byKey[k]; var st = snap[k] || {};

@@ -56,10 +56,13 @@ window.Ads = window.Ads || {};
   }
   function currentProject() { return gen.projectId ? store.getProject(gen.projectId) : null; }
   // base for tracked ad links: the public collector once configured, else this
-  // machine (works for local testing; real campaigns need the public URL)
+  // machine — except localhost (the SSH tunnel), which means nothing to the
+  // outside world: real links must use the public address
   function trackBase() {
     var t = store.getSettings().tracking || {};
-    return String(t.url || window.location.origin).replace(/\/+$/, '');
+    if (t.url) return String(t.url).replace(/\/+$/, '');
+    if (/^https?:\/\/(localhost|127\.)/i.test(window.location.origin)) return 'https://sm.partisans.ca';
+    return String(window.location.origin).replace(/\/+$/, '');
   }
   function ensureProject() {
     var p = currentProject();

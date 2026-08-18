@@ -256,5 +256,64 @@ window.Ads = window.Ads || {};
       .then(function (r) { return r.json(); }).catch(function () { return { enabled: true, ok: false, error: 'Could not reach the key checker' }; });
   }
 
-  Ads.ai = { status: status, setKey: setKey, generateCopy: generateCopy, generateDossier: generateDossier, research: research, audience: audience, landingContent: landingContent, imageConcepts: imageConcepts, genImage: genImage, genImages: genImages, genClip: genClip, geminiStatus: geminiStatus, setGeminiKey: setGeminiKey, geminiVerify: geminiVerify, mediaPlan: mediaPlan, variationToSpec: variationToSpec, scrape: scrape, editSpec: editSpec };
+  /* ---- Instagram direct posting ------------------------------------------ */
+  function metaStatus() {
+    return fetch('/api/meta/status').then(function (r) { return r.json(); }).catch(function () { return { enabled: false }; });
+  }
+  function setMetaKey(key) {
+    return fetch('/api/meta/key', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ads-Hub': '1' }, body: JSON.stringify({ key: key }) })
+      .then(function (r) { return r.json().then(function (b) { if (!r.ok) throw new Error(b && b.message || 'Token error'); return b; }); });
+  }
+  function metaVerify() {
+    return fetch('/api/meta/verify', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ads-Hub': '1' } })
+      .then(function (r) { return r.json(); }).catch(function () { return { enabled: true, ok: false, error: 'Could not reach the token checker' }; });
+  }
+  // Stage a rendered creative (Blob) at a public URL Meta can fetch.
+  function metaStage(blob, name) {
+    return fetch('/api/meta/stage?name=' + encodeURIComponent(name), {
+      method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-Ads-Hub': '1' }, body: blob
+    }).then(function (r) {
+      return r.json().then(function (b) { if (!r.ok) throw new Error(b && b.message || 'Staging failed (' + r.status + ')'); return b; });
+    });
+  }
+  // Publish one staged creative → { mediaId, permalink }. The server answers
+  // instantly with a job id (reels process for minutes — longer than proxies
+  // allow a response to hang) and we poll until it lands. payload.idem makes
+  // retries safe: the same ad can never be double-posted.
+  function metaPost(payload) {
+    return fetch('/api/meta/post', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ads-Hub': '1' }, body: JSON.stringify(payload)
+    }).then(function (r) {
+      return r.json().then(function (b) {
+        if (r.status === 501) { var e = new Error(b && b.message || 'Instagram not connected'); e.noKey = true; throw e; }
+        if (!r.ok) throw new Error(b && b.message || 'Posting failed (' + r.status + ')');
+        return b.job;
+      });
+    }).then(function (job) {
+      return new Promise(function (resolve, reject) {
+        var waited = 0;
+        (function poll() {
+          fetch('/api/meta/post-status?job=' + encodeURIComponent(job), { headers: { 'X-Ads-Hub': '1' } })
+            .then(function (r) { return r.json(); })
+            .then(function (s) {
+              if (s.state === 'done') return resolve({ mediaId: s.mediaId, permalink: s.permalink });
+              if (s.state === 'error') return reject(new Error(s.error || 'Instagram rejected the post'));
+              waited += 4000;
+              if (waited > 8 * 60 * 1000) return reject(new Error('Still processing after 8 minutes — press 🚀 again later; already-posted ads are skipped'));
+              setTimeout(poll, 4000);
+            })
+            .catch(function () { waited += 4000; setTimeout(poll, 4000); });   // transient network blip — keep polling
+        })();
+      });
+    });
+  }
+  function metaInsights(ids) {
+    return fetch('/api/meta/insights', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ads-Hub': '1' }, body: JSON.stringify({ ids: ids })
+    }).then(function (r) {
+      return r.json().then(function (b) { if (!r.ok) throw new Error(b && b.message || 'Insights failed (' + r.status + ')'); return b; });
+    });
+  }
+
+  Ads.ai = { status: status, setKey: setKey, generateCopy: generateCopy, generateDossier: generateDossier, research: research, audience: audience, landingContent: landingContent, imageConcepts: imageConcepts, genImage: genImage, genImages: genImages, genClip: genClip, geminiStatus: geminiStatus, setGeminiKey: setGeminiKey, geminiVerify: geminiVerify, metaStatus: metaStatus, setMetaKey: setMetaKey, metaVerify: metaVerify, metaStage: metaStage, metaPost: metaPost, metaInsights: metaInsights, mediaPlan: mediaPlan, variationToSpec: variationToSpec, scrape: scrape, editSpec: editSpec };
 })();

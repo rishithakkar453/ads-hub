@@ -257,6 +257,7 @@ window.Ads = window.Ads || {};
     // live tracking: spend per adKey + the last stats snapshot pulled from the collector
     if (!state.tracking || typeof state.tracking !== 'object') state.tracking = { spend: {}, snapshot: null, syncedAt: null };
     if (!state.tracking.spend) state.tracking.spend = {};
+    if (!state.tracking.ig) state.tracking.ig = { byId: {}, syncedAt: null };   // synced Instagram per-post insights
     if (!state.prefs || !state.prefs.liked) state.prefs = { liked: [], disliked: [] };
     if (!Array.isArray(state.projects)) state.projects = [];
     state.projects.forEach(function (p) {
@@ -341,11 +342,18 @@ window.Ads = window.Ads || {};
     getTracking: function () {
       if (!state.tracking) state.tracking = { spend: {}, snapshot: null, syncedAt: null };
       if (!state.tracking.spend) state.tracking.spend = {};
+      if (!state.tracking.ig) state.tracking.ig = { byId: {}, syncedAt: null };
       return state.tracking;
     },
     setTrackSnapshot: function (snap) {
       var t = store.getTracking();
       t.snapshot = snap || null; t.syncedAt = util.nowISO(); commit();
+    },
+    // merge freshly synced Instagram per-post insights (keyed by IG media id)
+    setTrackIG: function (byId) {
+      var t = store.getTracking();
+      Object.keys(byId || {}).forEach(function (id) { t.ig.byId[id] = byId[id]; });
+      t.ig.syncedAt = util.nowISO(); commit();
     },
     setTrackSpend: function (adKey, val) {
       var t = store.getTracking();
