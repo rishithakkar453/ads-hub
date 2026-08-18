@@ -138,10 +138,10 @@ window.Ads = window.Ads || {};
   // without needing access to the other person's browser. One report per
   // project per page load; fire-and-forget, never user-visible.
   var diagSent = {};
-  function reportRenderDiag(pid) {
+  function reportRenderDiag(pid, recheck) {
     try {
-      if (diagSent[pid] || gen.projectId !== pid) return;
-      diagSent[pid] = 1;
+      if ((!recheck && diagSent[pid]) || gen.projectId !== pid) return;
+      if (!recheck) diagSent[pid] = 1;
       var shelf = document.querySelector('#gen-saved');
       var p = store.getProject(pid);
       var imgs = shelf ? [].slice.call(shelf.querySelectorAll('img')) : [];
@@ -158,23 +158,49 @@ window.Ads = window.Ads || {};
         } catch (e) { painted = -1; }
       });
       var visible = stages.filter(function (s) { var r = s.getBoundingClientRect(); return r.width > 5 && r.height > 5; }).length;
+      // per-cell layout forensics: slot width, mounted visual's rect + transform,
+      // and offsetParent (null ⇔ a display:none ancestor kills all layout)
+      var cellsDiag = [];
+      if (shelf) [].slice.call(shelf.querySelectorAll('.saved-cell')).slice(0, 3).forEach(function (cell) {
+        var slot = cell.querySelector('[data-ad-slot]');
+        var vis = slot && slot.firstChild;
+        var r = (vis && vis.getBoundingClientRect) ? vis.getBoundingClientRect() : null;
+        cellsDiag.push({
+          slotW: slot ? slot.clientWidth : -1,
+          visW: r ? Math.round(r.width) : -1,
+          visH: r ? Math.round(r.height) : -1,
+          tf: vis ? getComputedStyle(vis).transform.slice(0, 40) : '',
+          hidden: slot ? (slot.offsetParent === null) : null
+        });
+      });
+      var shelfR = shelf ? shelf.getBoundingClientRect() : null;
       var report = {
-        why: 'saved-shelf render',
+        v: 2,
+        why: recheck ? 'saved-shelf recheck' : 'saved-shelf render',
         ua: navigator.userAgent.slice(0, 160),
         viewport: window.innerWidth + 'x' + window.innerHeight,
+        dpr: window.devicePixelRatio,
+        visState: document.visibilityState,
         framed: window.top !== window.self,
         project: pid,
         savedInStore: (p && p.savedAds || []).length,
         shelfCells: shelf ? shelf.querySelectorAll('.ad-stage-scaler, canvas').length : -1,
+        shelfRect: shelfR ? Math.round(shelfR.width) + 'x' + Math.round(shelfR.height) + '@' + Math.round(shelfR.top) : null,
+        shelfHidden: shelf ? (shelf.offsetParent === null) : null,
         imgs: imgs.length,
         imgsDecoded: imgs.filter(function (im) { return im.naturalWidth > 0; }).length,
         canvases: canvases.length,
         canvasPaintedSample: painted + '/' + Math.min(6, canvases.length),
         stages: stages.length,
         stagesVisible: visible,
+        cells: cellsDiag,
+        healRuns: healCount,
         memoryMB: (performance && performance.memory) ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null
       };
       fetch('/api/diag', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ads-Hub': '1' }, body: JSON.stringify(report) }).catch(function () {});
+      // if nothing was visible, report again later so the log shows whether
+      // the visibility-triggered heal eventually fixed it on this machine
+      if (!recheck && stages.length && !visible) setTimeout(function () { reportRenderDiag(pid, true); }, 10000);
     } catch (e) {}
   }
   // the last opened project auto-reopens after a page reload, so saved ads
@@ -2407,10 +2433,23 @@ window.Ads = window.Ads || {};
       if (ctrl) liveControllers.push(ctrl);
     });
   }
-  var healT = null;
-  window.addEventListener('resize', function () {
-    clearTimeout(healT); healT = setTimeout(healMounts, 250);
-  });
+  var healT = null, healCount = 0;
+  function scheduleHeal() { clearTimeout(healT); healT = setTimeout(function () { healCount++; healMounts(); }, 250); }
+  window.addEventListener('resize', scheduleHeal);
+  // resize never fires for display:none → visible flips (e.g. an embedding
+  // page revealing the app after boot) — heal when cells actually appear
+  document.addEventListener('visibilitychange', scheduleHeal);
+  var healIO = (typeof IntersectionObserver !== 'undefined')
+    ? new IntersectionObserver(function (entries) {
+        for (var i = 0; i < entries.length; i++) if (entries[i].isIntersecting) { scheduleHeal(); return; }
+      })
+    : null;
+  function watchShelfVisibility() {
+    if (!healIO || !viewEl) return;
+    healIO.disconnect();
+    var sec = viewEl.querySelector('#gen-saved'); if (sec) healIO.observe(sec);
+    var grid = viewEl.querySelector('#gv-grid, .var-grid'); if (grid) healIO.observe(grid);
+  }
 
   /* ===================== bulk actions ==================================== */
   // adKeys that actually have a published, resolvable landing page (a tracked
@@ -3184,6 +3223,7 @@ window.Ads = window.Ads || {};
     bindAudience(el);
     bindResults(el);
     bindSaved(el);
+    watchShelfVisibility();   // heal degenerate mounts the moment cells become visible
     syncGemStatus();   // fills in the inline Nano Banana key row once status is known
   }
 
