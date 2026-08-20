@@ -762,6 +762,24 @@ window.Ads = window.Ads || {};
               '<li>Use cases → Customize → <strong>API setup with Instagram business login</strong> → Add account → log in with Instagram → <strong>Generate token</strong></li>' +
               '<li>Copy the whole <code>IGAA…</code> string and paste it above — it verifies instantly and renews itself</li>' +
             '</ol></details>' +
+        '</div>' +
+        '<div class="section-head" style="margin-top:3.4rem"><h2>🌑 Dark ads — paid, invisible on the profile</h2></div>' +
+        '<div class="card" style="max-width:76rem;padding:2.4rem 2.8rem">' +
+          '<div class="hint" id="dk-state" style="margin-bottom:1.6rem"><span class="spinner"></span> Checking…</div>' +
+          '<p class="u-muted">A separate <strong>System User token</strong> from Meta Business Manager unlocks the 🌑 option on the round page: real ads with budget and audience targeting that never appear on the profile. Everything is created <strong>paused</strong> — you review and activate in Ads Manager, so Ads Hub can never start spend on its own.</p>' +
+          '<div class="field" style="margin-top:1.6rem"><label>System User token</label>' +
+            '<input class="input" type="password" id="dk-key" placeholder="EAAB… (from Business Settings → System users → Generate token)" autocomplete="off" spellcheck="false"></div>' +
+          '<div class="btn-row"><button class="btn is-primary is-sm" id="dk-save">Connect</button>' +
+            '<button class="btn is-ghost is-sm" id="dk-forget">Disconnect</button></div>' +
+          '<div id="dk-pickers" style="margin-top:1.2rem"></div>' +
+          '<details style="margin-top:2rem"><summary class="u-label" style="cursor:pointer">One-time Business Manager setup</summary>' +
+            '<ol style="margin:1.2rem 0 0.4rem 2rem;line-height:1.9;font-size:1.28rem">' +
+              '<li><strong>business.facebook.com</strong> → create a Business portfolio (same developer login)</li>' +
+              '<li>Create a <strong>Facebook Page</strong> (invisible shell, never posted to) and connect your Instagram account to it (Page settings → Linked accounts) so dark ads deliver as @your-handle</li>' +
+              '<li>Create an <strong>ad account</strong> + add a <strong>payment method</strong> (Ads Manager → Billing); accept the ad terms + non-discrimination prompt</li>' +
+              '<li>Business Settings → Users → <strong>System users</strong> → create (Admin) → add the ADS HUB app → <strong>Assign assets</strong>: ad account (Manage campaigns) + Page (Full control)</li>' +
+              '<li><strong>Generate token</strong> with: ads_management, ads_read, business_management, pages_show_list, pages_read_engagement, pages_manage_ads, instagram_basic → paste above</li>' +
+            '</ol></details>' +
         '</div></div>';
       var st = el.querySelector('#ig-state');
       function refresh() {
@@ -799,6 +817,72 @@ window.Ads = window.Ads || {};
           title: 'Disconnect Instagram?', message: 'Direct posting turns off until you paste a token again. Published posts stay up.',
           danger: true, okLabel: 'Disconnect',
           onConfirm: function () { ai().setMetaKey('').then(function () { Ads.toast('Instagram disconnected'); refresh(); }).catch(function (e) { Ads.toast(e.message, true); }); }
+        });
+      });
+      // ---- dark-ads (Marketing API) card ----
+      var dkState = el.querySelector('#dk-state'), dkPickers = el.querySelector('#dk-pickers');
+      function renderDkPickers(conf) {
+        if (!dkPickers) return;
+        if (!conf || (!(conf.accounts || []).length && !(conf.pages || []).length)) { dkPickers.innerHTML = ''; return; }
+        var html = '';
+        if ((conf.accounts || []).length > 1) {
+          html += '<div class="field" style="max-width:32rem"><label>Ad account</label><select class="select" id="dk-acct">' +
+            (conf.adAccountId ? '' : '<option value="" selected>— pick an ad account —</option>') +
+            conf.accounts.map(function (a) { return '<option value="' + esc(a.id) + '"' + (a.id === conf.adAccountId ? ' selected' : '') + '>' + esc(a.name) + ' (' + esc(a.currency) + ')</option>'; }).join('') + '</select></div>';
+        }
+        if ((conf.pages || []).length > 1) {
+          html += '<div class="field" style="max-width:32rem"><label>Page (ad identity)</label><select class="select" id="dk-page">' +
+            (conf.pageId ? '' : '<option value="" selected>— pick a Page —</option>') +
+            conf.pages.map(function (pg) { return '<option value="' + esc(pg.id) + '"' + (pg.id === conf.pageId ? ' selected' : '') + '>' + esc(pg.name) + (pg.igUsername ? ' → @' + esc(pg.igUsername) : ' (no IG connected)') + '</option>'; }).join('') + '</select></div>';
+        }
+        dkPickers.innerHTML = html;
+        var acctSel = dkPickers.querySelector('#dk-acct'), pageSel = dkPickers.querySelector('#dk-page');
+        function push() {
+          ai().madsConfig({ adAccountId: acctSel ? acctSel.value : conf.adAccountId, pageId: pageSel ? pageSel.value : conf.pageId })
+            .then(refreshDk).catch(function (e) { Ads.toast(e.message, true); });
+        }
+        if (acctSel) acctSel.addEventListener('change', push);
+        if (pageSel) pageSel.addEventListener('change', push);
+      }
+      function refreshDk() {
+        if (!dkState) return;
+        ai().madsStatus().then(function (g) {
+          var conf = g && g.conf;
+          if (g && g.enabled && g.ok === false) {
+            dkState.innerHTML = '<strong style="color:var(--bad,#e5704f)">⚠ Meta is rejecting the token.</strong> ' + esc(g.error || '') + ' Generate a fresh System User token and paste it again.';
+          } else if (g && g.enabled && conf && conf.adAccountId && conf.pageId) {
+            dkState.innerHTML = '✓ <strong>Dark ads ready</strong> — ad account <strong>' + esc(conf.adAccountName || conf.adAccountId) + '</strong> (' + esc(conf.currency || '') + '), identity <strong>' + esc(conf.pageName || conf.pageId) + (conf.igUsername ? ' → @' + esc(conf.igUsername) : '') + '</strong>.' +
+              (!conf.igUsername ? ' <span style="color:var(--warn,#e6b450)">No Instagram connected to this Page — ads will use the Page identity; connect your IG to the Page for @-handle delivery.</span>' : '');
+          } else if (g && g.enabled) {
+            dkState.innerHTML = '<strong style="color:var(--warn,#e6b450)">Token OK — pick the ad account and Page below.</strong>' +
+              ((conf && !(conf.accounts || []).length) ? ' No ad accounts are assigned to this System User yet — assign the ad account in Business Settings.' : '');
+          } else {
+            dkState.textContent = 'Not connected — dark ads unlock after the Business Manager setup below.';
+          }
+          renderDkPickers(conf);
+        });
+      }
+      refreshDk();
+      el.querySelector('#dk-save').addEventListener('click', function () {
+        var k = el.querySelector('#dk-key').value;
+        if (!k.trim()) { Ads.toast('Paste the System User token first', true); return; }
+        dkState.innerHTML = '<span class="spinner"></span> Saving & discovering your ad account…';
+        ai().setMadsKey(k).then(function (resp) {
+          el.querySelector('#dk-key').value = '';
+          if (resp && resp.ok === false) {
+            dkState.innerHTML = '<strong style="color:var(--bad,#e5704f)">Meta rejected the token:</strong> ' + esc(resp.error || 'invalid') + ' — check the scopes and asset assignments in Business Settings.';
+            Ads.toast('Token saved but Meta rejects it', true);
+          } else {
+            Ads.toast('Dark ads connected');
+            refreshDk();
+          }
+        }).catch(function (e) { dkState.innerHTML = '<strong style="color:var(--bad,#e5704f)">Could not save:</strong> ' + esc(e.message || ''); Ads.toast(e.message, true); });
+      });
+      el.querySelector('#dk-forget').addEventListener('click', function () {
+        Ads.confirm({
+          title: 'Disconnect dark ads?', message: 'Existing campaigns stay in Ads Manager; Ads Hub just loses access.',
+          danger: true, okLabel: 'Disconnect',
+          onConfirm: function () { ai().setMadsKey('').then(function () { Ads.toast('Dark ads disconnected'); refreshDk(); }).catch(function (e) { Ads.toast(e.message, true); }); }
         });
       });
     }
@@ -898,6 +982,26 @@ window.Ads = window.Ads || {};
             (ig.permalink ? '<a href="' + esc(ig.permalink) + '" target="_blank" rel="noopener">on Instagram</a>' : 'posted') +
             (bits.length ? ' · ' + bits.join(' · ') : ' · stats arrive on next sync') + '</div>';
         }
+        var dk = (r.dark && r.dark.ads || {})[k];
+        if (!(dk && dk.adId)) {
+          // fall back to the newest archived run that has this ad
+          for (var dri = (r.darkRuns || []).length - 1; dri >= 0; dri--) {
+            var old = (r.darkRuns[dri].ads || {})[k];
+            if (old && old.adId) { dk = old; break; }
+          }
+        }
+        if (dk && dk.adId) {
+          var dkm = t.dark && t.dark.byId && t.dark.byId[dk.adId];
+          var dbits = [];
+          if (dkm && !dkm.error) {
+            if (dkm.status) dbits.push(dkm.status === 'PAUSED' ? 'paused' : dkm.status.toLowerCase());
+            if (dkm.impressions != null) dbits.push(dkm.impressions + ' impr');
+            if (dkm.clicks != null) dbits.push(dkm.clicks + ' clicks');
+            if (dkm.spend != null) dbits.push(dkm.spend + ' ' + esc((r.dark && r.dark.currency) || '') + ' spent');
+            if (dkm.cpc != null) dbits.push(dkm.cpc + '/click');
+          }
+          igLine += '<div class="rndp-ig">🌑 dark ad ' + (dbits.length ? '· ' + dbits.join(' · ') : '· created paused — stats after next sync') + '</div>';
+        }
         return '<div class="rndp-card">' +
           '<div class="rndp-thumb cr-stage-scaler" data-rt2="' + esc(k) + '"></div>' +
           '<div class="rndp-body">' +
@@ -966,17 +1070,29 @@ window.Ads = window.Ads || {};
             var g = r2.igPosts[k2]; if (g && g.id) ids.push(g.id);
           });
         });
-        if (!ids.length) return Ads.go('rounds');
-        ai().metaInsights(ids)
-          .then(function (resp) {
-            // keep previous good numbers: a transiently failing id must not
-            // overwrite real stats with an error entry
-            var clean = {}, by = resp.byId || {};
-            Object.keys(by).forEach(function (id) { if (by[id] && !by[id].error) clean[id] = by[id]; });
-            if (Object.keys(clean).length) store.setTrackIG(clean);
-          })
-          .catch(function () {})   // not connected / offline — collector stats still synced
-          .then(function () { Ads.go('rounds'); });
+        var darkIds = [];
+        projRounds(store.getProject(p.id) || p).forEach(function (r2) {
+          // current run + every archived run — an old campaign may be ACTIVE
+          var sets = [(r2.dark && r2.dark.ads) || {}].concat((r2.darkRuns || []).map(function (dr) { return dr.ads || {}; }));
+          sets.forEach(function (set) {
+            Object.keys(set).forEach(function (k2) {
+              var d = set[k2]; if (d && d.adId && darkIds.indexOf(d.adId) < 0) darkIds.push(d.adId);
+            });
+          });
+        });
+        var syncs = [];
+        if (ids.length) syncs.push(ai().metaInsights(ids).then(function (resp) {
+          var clean = {}, by = resp.byId || {};
+          Object.keys(by).forEach(function (id) { if (by[id] && !by[id].error) clean[id] = by[id]; });
+          if (Object.keys(clean).length) store.setTrackIG(clean);
+        }).catch(function () {}));
+        if (darkIds.length) syncs.push(ai().madsInsights(darkIds).then(function (resp) {
+          var clean = {}, by = resp.byId || {};
+          Object.keys(by).forEach(function (id) { if (by[id] && !by[id].error) clean[id] = by[id]; });
+          if (Object.keys(clean).length) store.setTrackDark(clean);
+        }).catch(function () {}));
+        if (!syncs.length) return Ads.go('rounds');
+        Promise.all(syncs).then(function () { Ads.go('rounds'); });
       });
     });
     el.querySelectorAll('[data-copy]').forEach(function (b) {
@@ -1256,19 +1372,216 @@ window.Ads = window.Ads || {};
     });
     var post = box.querySelector('#pp-post');
     if (post) post.addEventListener('click', function () {
-      // connected → real posting flow; not yet → the one-time setup steps.
-      // A stale error flag gets one live re-check before blocking the flow.
-      ai().metaStatus().then(function (st) {
-        if (st && st.enabled && st.ok !== false) return openIgPostFlow(p.id, r.id);
-        if (st && st.enabled) {
-          return ai().metaVerify().then(function (v) {
-            if (v && v.ok) return openIgPostFlow(p.id, r.id);
-            Ads.toast('Instagram token problem: ' + ((v && v.error) || 'see Performance → Instagram'), true);
-            igSetupModal(p, r);
+      // two ways to launch: public organic posts on the profile, or paid dark
+      // ads that never appear there. Ask which — each falls back to its own
+      // setup instructions when not yet connected.
+      Ads.modal({
+        title: 'How do you want to launch this round?',
+        body: '<div class="pchoice">' +
+          '<button class="pchoice-opt" data-pchoice="public"><strong>📣 Public posts</strong><span>Publish on the @profile as normal posts (free). Boost the winners manually in the Instagram app.</span></button>' +
+          '<button class="pchoice-opt" data-pchoice="dark"><strong>🌑 Dark ads</strong><span>Paid ads with budget + audience targeting that NEVER show on the profile. Created paused — you activate them in Ads Manager.</span></button>' +
+        '</div>',
+        foot: [{ label: 'Cancel', act: 'cancel', ghost: true }],
+        onMount: function (m) {
+          m.querySelectorAll('[data-pchoice]').forEach(function (b) {
+            b.addEventListener('click', function () {
+              var choice = b.getAttribute('data-pchoice');
+              Ads.closeModal();
+              if (choice === 'public') {
+                ai().metaStatus().then(function (st) {
+                  if (st && st.enabled && st.ok !== false) return openIgPostFlow(p.id, r.id);
+                  if (st && st.enabled) {
+                    return ai().metaVerify().then(function (v) {
+                      if (v && v.ok) return openIgPostFlow(p.id, r.id);
+                      Ads.toast('Instagram token problem: ' + ((v && v.error) || 'see Performance → Instagram'), true);
+                      igSetupModal(p, r);
+                    });
+                  }
+                  igSetupModal(p, r);
+                });
+              } else {
+                ai().madsStatus().then(function (st) {
+                  if (st && st.enabled && st.ok !== false && st.conf && st.conf.adAccountId && st.conf.pageId) return openDarkPostFlow(p.id, r.id, st.conf);
+                  if (st && st.enabled) { Ads.toast('Dark ads are connected but need the ad account/Page picked — see Performance → Instagram', true); Ads.go('instagram'); return; }
+                  darkSetupModal();
+                });
+              }
+            });
           });
-        }
-        igSetupModal(p, r);
+        },
+        onAction: function (act) { if (act === 'cancel') Ads.closeModal(); }
       });
+    });
+  }
+  function darkSetupModal() {
+    Ads.modal({
+      title: 'Set up dark ads (one-time)', wide: true,
+      body: '<p class="u-muted">Dark ads run through Meta’s ads system — that needs the money plumbing once:</p>' +
+        '<ol style="margin:1.2rem 0 1.2rem 2rem;line-height:1.9;font-size:1.3rem">' +
+          '<li><strong>business.facebook.com</strong> → create a Business portfolio (use your developer login)</li>' +
+          '<li>Create a <strong>Facebook Page</strong> (invisible shell — never post to it) and connect your Instagram account to it (Page settings → Linked accounts)</li>' +
+          '<li>Create an <strong>ad account</strong> and add a <strong>payment method</strong> (Ads Manager → Billing); accept the ad terms and the non-discrimination certification when prompted</li>' +
+          '<li>Business Settings → Users → <strong>System users</strong> → create one (Admin), add your ADS HUB app to it, and <strong>Assign assets</strong>: the ad account (Manage campaigns) + the Page (Full control)</li>' +
+          '<li>Generate the token with scopes <strong>ads_management, ads_read, business_management, pages_show_list, pages_read_engagement, pages_manage_ads, instagram_basic</strong></li>' +
+          '<li>Paste it in <strong>Performance → Instagram → Dark ads</strong></li>' +
+        '</ol>' +
+        '<p class="u-muted">Every dark ad is created <strong>paused</strong> — Ads Hub never starts spend; you review and switch ads on in Ads Manager.</p>',
+      foot: [{ label: 'Open the connect page', act: 'go', primary: true }, { label: 'Close', act: 'cancel', ghost: true }],
+      onAction: function (act) { Ads.closeModal(); if (act === 'go') Ads.go('instagram'); }
+    });
+  }
+  function blobToB64(blob) {
+    return new Promise(function (resolve, reject) {
+      var fr = new FileReader();
+      fr.onload = function () { resolve(String(fr.result).split(',')[1] || ''); };
+      fr.onerror = function () { reject(new Error('could not read the rendered file')); };
+      fr.readAsDataURL(blob);
+    });
+  }
+  function openDarkPostFlow(pid, rid, conf) {
+    var p = store.getProject(pid); if (!p) return;
+    var r = projRounds(p).filter(function (x) { return x.id === rid; })[0]; if (!r) return;
+    var byKey = savedByKey(p);
+    var items = r.adKeys.map(function (k) {
+      var a = byKey[k]; if (!a) return null;
+      return { key: k, spec: a };
+    }).filter(Boolean);
+    if (!items.length) return Ads.toast('No ads in this round', true);
+    var priorIn = (r.plan && r.plan.input) || {};
+    var rows = items.map(function (it) {
+      return '<div class="igpost-row">' +
+        '<div class="igpost-row-thumb cr-stage-scaler" data-dkt="' + esc(it.key) + '"></div>' +
+        '<div class="igpost-row-body"><strong>' + esc(it.spec.angle || it.spec.name || it.key) + '</strong>' +
+          '<span class="u-faint">' + (it.spec.kind === 'video' ? 'video dark ad' : 'image dark ad') + ' · CTA link → its landing page</span></div>' +
+        '<div class="igpost-row-state" data-dkstate="' + esc(it.key) + '">ready</div>' +
+      '</div>';
+    }).join('');
+    Ads.modal({
+      title: '🌑 Dark ads for ' + (r.name || 'this round'), wide: true,
+      body: '<p class="u-muted">Creates one paused campaign in ad account <strong>' + esc(conf.adAccountName || conf.adAccountId) + '</strong>' +
+          (conf.igUsername ? ', delivering as <strong>@' + esc(conf.igUsername) + '</strong>' : '') +
+          ' — none of it appears on the profile, and nothing spends until you activate the ads in Ads Manager.</p>' +
+        (r.dark && r.dark.campaignId ? '<div class="hint" style="margin-bottom:1rem">⚠ This round already has a dark campaign — running again creates a NEW one (the old one stays in Ads Manager).</div>' : '') +
+        '<div class="pp-quick">' +
+          '<div class="field" style="max-width:14rem;margin:0"><label>Daily budget (' + esc(conf.currency || 'USD') + ')</label><input class="input" id="dk-budget" inputmode="decimal" placeholder="20" value="' + esc(priorIn.budget && +priorIn.budget <= 100 ? priorIn.budget : '') + '"></div>' +
+          '<div class="field" style="max-width:16rem;margin:0"><label>Countries</label><input class="input" id="dk-countries" value="CA, US" placeholder="CA, US"></div>' +
+          '<div class="field" style="max-width:9rem;margin:0"><label>Age min</label><input class="input" id="dk-agemin" inputmode="numeric" value="25"></div>' +
+          '<div class="field" style="max-width:9rem;margin:0"><label>Age max</label><input class="input" id="dk-agemax" inputmode="numeric" value="65"></div>' +
+          '<label class="pp-chip" style="align-self:flex-end"><input type="checkbox" id="dk-fb"><span>also Facebook feed</span></label>' +
+        '</div>' +
+        '<div class="igpost-list">' + rows + '</div>' +
+        '<div class="gh-status" id="dk-status"></div>',
+      foot: [
+        { label: 'Create ' + items.length + ' dark ad' + (items.length === 1 ? '' : 's') + ' (paused)', act: 'go', primary: true },
+        { label: 'Cancel', act: 'cancel', ghost: true }
+      ],
+      onMount: function (m) {
+        m.querySelectorAll('[data-dkt]').forEach(function (n) {
+          var it = items.filter(function (x) { return x.key === n.getAttribute('data-dkt'); })[0];
+          if (it) { try { mountThumbFitted(n, it.spec, 90, 110); } catch (e) {} }
+        });
+        // editing budget/targeting invalidates an armed confirm — the number
+        // you confirm must be the number that runs
+        ['dk-budget', 'dk-countries', 'dk-agemin', 'dk-agemax', 'dk-fb'].forEach(function (id) {
+          var n = m.querySelector('#' + id); if (!n) return;
+          n.addEventListener(id === 'dk-fb' ? 'change' : 'input', function () {
+            m.__dkArmed = false;
+            var g = m.querySelector('[data-mact="go"]');
+            if (g && !g.disabled) g.textContent = 'Create ' + items.length + ' dark ad' + (items.length === 1 ? '' : 's') + ' (paused)';
+          });
+        });
+      },
+      onAction: function (act, m) {
+        if (act === 'cancel') return Ads.closeModal();
+        if (act !== 'go') return;
+        var budget = parseFloat(m.querySelector('#dk-budget').value);
+        if (!(budget > 0)) return Ads.toast('Set a daily budget — that is what Meta will spend per day once YOU activate the ads', true);
+        var countries = m.querySelector('#dk-countries').value.split(',').map(function (c) { return c.trim().toUpperCase(); }).filter(function (c) { return /^[A-Z]{2}$/.test(c); });
+        if (!countries.length) return Ads.toast('Give at least one 2-letter country code (e.g. CA, US)', true);
+        var goBtn = m.querySelector('[data-mact="go"]');
+        if (!m.__dkArmed) {
+          m.__dkArmed = true;
+          if (goBtn) goBtn.textContent = '⚠ Creates a PAUSED campaign with ' + items.length + ' dark ad' + (items.length === 1 ? '' : 's') + ' at ' + budget + ' ' + (conf.currency || 'USD') + '/day — press again to confirm';
+          return;
+        }
+        if (goBtn) { goBtn.disabled = true; goBtn.innerHTML = '<span class="spinner"></span> Working…'; }
+        var status = m.querySelector('#dk-status');
+        function setRow(key, html) { var el2 = m.querySelector('[data-dkstate="' + key + '"]'); if (el2) el2.innerHTML = html; }
+        // 1. render every creative locally (images → JPEG bytes, videos → MP4
+        //    staged publicly + poster thumb), 2. one server job builds the chain
+        var payloadAds = [], pi = 0;
+        (function prep() {
+          if (pi >= items.length) return launch();
+          var it = items[pi++];
+          setRow(it.key, '<span class="spinner"></span> rendering…');
+          var link = publicLinkBase() + '/a/' + it.key + '?s=ig';
+          if (it.spec.kind === 'video') {
+            Ads.video.exportVideo(it.spec).then(function (rr) {
+              if (rr.ext !== 'mp4') throw new Error('browser exported ' + rr.ext + ' — Meta needs MP4 (use Chrome)');
+              setRow(it.key, '<span class="spinner"></span> uploading…');
+              return ai().metaStage(rr.blob, it.key + '-dark.mp4').then(function (staged) {
+                return Ads.video.posterBlob(it.spec).then(creativeToJpeg).then(blobToB64).then(function (thumb) {
+                  payloadAds.push({ adKey: it.key, name: it.spec.angle || it.spec.name || it.key, kind: 'video', videoUrl: staged.url, thumbB64: thumb, caption: it.spec.caption || '', link: link });
+                  setRow(it.key, 'ready to submit');
+                  prep();
+                });
+              });
+            }).catch(function (e) { setRow(it.key, '<span style="color:var(--bad,#e5704f)">✗ ' + esc((e.message || 'render failed').slice(0, 90)) + '</span>'); prep(); });
+          } else {
+            render.exportPNG(it.spec).then(creativeToJpeg).then(blobToB64).then(function (b64) {
+              payloadAds.push({ adKey: it.key, name: it.spec.angle || it.spec.name || it.key, kind: 'image', imageB64: b64, caption: it.spec.caption || '', link: link });
+              setRow(it.key, 'ready to submit');
+              prep();
+            }).catch(function (e) { setRow(it.key, '<span style="color:var(--bad,#e5704f)">✗ ' + esc((e.message || 'render failed').slice(0, 90)) + '</span>'); prep(); });
+          }
+        })();
+        function launch() {
+          if (!payloadAds.length) {
+            if (status) status.textContent = 'Nothing rendered successfully — nothing was sent to Meta.';
+            if (goBtn) { goBtn.disabled = false; goBtn.textContent = 'Retry'; m.__dkArmed = false; }
+            return;
+          }
+          if (status) status.innerHTML = '<span class="spinner"></span> Creating the paused campaign on Meta…';
+          ai().madsDark({
+            roundId: rid, roundName: r.name, budget: budget, countries: countries,
+            ageMin: m.querySelector('#dk-agemin').value, ageMax: m.querySelector('#dk-agemax').value,
+            includeFb: m.querySelector('#dk-fb').checked,
+            ads: payloadAds,
+            idem: 'dark:' + rid + ':' + (r.dark && r.dark.campaignId ? r.dark.campaignId : 'first')
+          }, function (note) { if (status) status.innerHTML = '<span class="spinner"></span> ' + esc(note); })
+            .then(function (result) {
+              var ok = 0, failed = 0;
+              Object.keys(result.ads || {}).forEach(function (k) {
+                if (result.ads[k].adId) { ok++; setRow(k, '✓ created (paused)'); }
+                else { failed++; setRow(k, '<span style="color:var(--bad,#e5704f)">✗ ' + esc((result.ads[k].error || 'failed').slice(0, 90)) + '</span>'); }
+              });
+              // archive the previous run — its (possibly ACTIVE, spending) ads
+              // must keep syncing and showing, never silently vanish
+              var pF = store.getProject(pid);
+              var rF = (pF && projRounds(pF).filter(function (x) { return x.id === rid; })[0]) || r;
+              var runs = (rF.darkRuns || []).slice();
+              if (rF.dark && rF.dark.campaignId && rF.dark.campaignId !== result.campaignId) runs.push(rF.dark);
+              updateRound(pid, rid, {
+                dark: { campaignId: result.campaignId, adsetId: result.adsetId, budget: budget, currency: conf.currency || 'USD', at: util.nowISO(), ads: result.ads },
+                darkRuns: runs
+              });
+              var actNum = String(conf.adAccountId || '').replace(/^act_/, '');
+              if (status) status.innerHTML = ok + ' dark ad' + (ok === 1 ? '' : 's') + ' created PAUSED' + (failed ? ' · ' + failed + ' failed' : '') +
+                ' — <a href="https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=' + esc(actNum) + '" target="_blank" rel="noopener">open Ads Manager</a> to review targeting and switch them on.';
+              if (goBtn) { goBtn.textContent = 'Done'; goBtn.disabled = false; goBtn.setAttribute('data-mact', 'cancel'); }
+              Ads.toast(ok + ' paused dark ad' + (ok === 1 ? '' : 's') + ' created — activate in Ads Manager', !!failed && !ok);
+              Ads.go('rounds');
+            })
+            .catch(function (e) {
+              var extra = '';
+              if (e.partial && e.partial.campaignId) {
+                extra = ' A paused campaign was already created before the failure — pressing Retry RESUMES it (no duplicate).';
+              }
+              if (status) status.innerHTML = '<span style="color:var(--bad,#e5704f)">✗ ' + esc((e.message || 'failed').slice(0, 200)) + '</span>' + esc(extra);
+              if (goBtn) { goBtn.disabled = false; goBtn.textContent = 'Retry'; m.__dkArmed = false; }
+            });
+        }
+      }
     });
   }
   function igSetupModal(p, r) {

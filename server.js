@@ -92,6 +92,47 @@ var PUB_DIR = path.join(ROOT, 'data', 'pub');
 // (adKey+round) so retries can never double-post. Swept hourly below.
 var igJobs = {};
 
+// --- Meta Marketing API (DARK ADS) — separate System User token -------------
+// Paid, targeted ads that never appear on the profile. Independent of the
+// organic Instagram connection above; everything is created PAUSED so money
+// can only start moving when the user activates ads in Ads Manager.
+var MADS_ENV_TOKEN = process.env.META_ADS_TOKEN || '';
+var MADS_TOKEN_FILE = path.join(__dirname, 'data', 'meta-ads.key');
+var MADS_CONF_FILE = path.join(__dirname, 'data', 'meta-ads.json');
+var madsRuntimeToken = '';
+var madsTokenPersisted = false;
+if (!MADS_ENV_TOKEN) {
+  try { var _mt = fs.readFileSync(MADS_TOKEN_FILE, 'utf8').trim(); if (_mt) { madsRuntimeToken = _mt; madsTokenPersisted = true; } } catch (e) {}
+}
+function effectiveMadsToken() {
+  if (MADS_ENV_TOKEN) return MADS_ENV_TOKEN;
+  if (!madsRuntimeToken) {
+    try { var t = fs.readFileSync(MADS_TOKEN_FILE, 'utf8').trim(); if (t) { madsRuntimeToken = t; madsTokenPersisted = true; } } catch (e) {}
+  }
+  return madsRuntimeToken;
+}
+function madsTokenSource() { return MADS_ENV_TOKEN ? 'env' : (madsRuntimeToken ? (madsTokenPersisted ? 'saved' : 'session') : 'none'); }
+var madsLastError = '';
+var madsConf = null;   // { adAccountId, adAccountName, currency, pageId, pageName, igUserId, igUsername, accounts[], pages[] }
+try { madsConf = JSON.parse(fs.readFileSync(MADS_CONF_FILE, 'utf8')); } catch (e) {}
+function saveMadsConf() {
+  try { fs.mkdirSync(path.dirname(MADS_CONF_FILE), { recursive: true }); fs.writeFileSync(MADS_CONF_FILE, JSON.stringify(madsConf)); } catch (e) {}
+}
+var FB_GRAPH_HOST = 'graph.facebook.com';
+// Durable ledger of every dark-ads run, keyed by round id. In-memory jobs die
+// on restart/GC while the created Meta objects live on — this file is what
+// prevents a retry from ever building a second identical campaign.
+var MADS_RUNS_FILE = path.join(__dirname, 'data', 'mads-runs.json');
+var madsRuns = {};
+try { madsRuns = JSON.parse(fs.readFileSync(MADS_RUNS_FILE, 'utf8')) || {}; } catch (e) {}
+function saveMadsRuns() {
+  try { fs.mkdirSync(path.dirname(MADS_RUNS_FILE), { recursive: true }); fs.writeFileSync(MADS_RUNS_FILE, JSON.stringify(madsRuns)); } catch (e) {}
+}
+// Meta budgets are in the account currency's MINOR unit — offset 100 for
+// USD/CAD/EUR etc, but 1 for zero-decimal currencies. Hardcoding ×100 would
+// be a 100× overspend on a JPY/KRW/TWD… account.
+var MADS_OFFSET_ONE = { CLP: 1, COP: 1, CRC: 1, HUF: 1, ISK: 1, IDR: 1, JPY: 1, KRW: 1, PYG: 1, TWD: 1, VND: 1 };
+
 // A project "has content" when it holds real work (saved ads, landing pages,
 // a dossier, generated images, or research). Used to guard against a wipe: a
 // fresh/empty browser state must never overwrite projects full of work on disk.
@@ -1163,6 +1204,238 @@ function igPublish(kind, publicURL, caption, cb) {
   });
 }
 
+/* ---- Meta Marketing API (graph.facebook.com) — dark ads ------------------- */
+function fbRequest(method, apiPath, params, cb, timeoutMs) {
+  var qs = Object.keys(params || {}).map(function (k) {
+    var v = params[k];
+    if (v != null && typeof v === 'object') v = JSON.stringify(v);
+    return encodeURIComponent(k) + '=' + encodeURIComponent(v);
+  }).join('&');
+  var p = '/' + IG_API_VERSION + apiPath;
+  var body = null;
+  if (method === 'GET') { if (qs) p += '?' + qs; } else body = qs;
+  var called = false;
+  function done(err, j) { if (called) return; called = true; cb(err, j); }
+  var rq = https.request({
+    hostname: FB_GRAPH_HOST, path: p, method: method,
+    headers: method === 'GET' ? {} : { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body || '') }
+  }, function (resp) {
+    var chunks = []; resp.on('data', function (c) { chunks.push(c); });
+    resp.on('end', function () {
+      var txt = Buffer.concat(chunks).toString('utf8');
+      var j = null; try { j = JSON.parse(txt); } catch (e) {}
+      if (resp.statusCode >= 200 && resp.statusCode < 300 && j) return done(null, j);
+      var msg = 'Meta ' + resp.statusCode;
+      if (j && j.error) msg += ': ' + (j.error.error_user_msg || j.error.message || JSON.stringify(j.error).slice(0, 250));
+      else if (txt) msg += ': ' + txt.slice(0, 250);
+      done(new Error(msg));
+    });
+  });
+  rq.on('error', function (e) { done(new Error('Meta request failed: ' + e.message)); });
+  rq.setTimeout(timeoutMs || 120000, function () { rq.destroy(new Error('Meta request timed out')); });
+  if (body) rq.write(body);
+  rq.end();
+}
+
+// Verify the System User token and discover what it can reach: ad accounts,
+// Pages, and each Page's connected Instagram identity. Auto-selects when
+// there is exactly one of each; otherwise the client offers a picker.
+function madsVerify(cb) {
+  var tok = effectiveMadsToken();
+  if (!tok) return cb(new Error('no_mads_token'));
+  fbRequest('GET', '/me', { fields: 'id,name', access_token: tok }, function (err, me) {
+    if (err) { madsLastError = err.message; return cb(err); }
+    fbRequest('GET', '/me/adaccounts', { fields: 'name,account_status,currency', limit: 25, access_token: tok }, function (aerr, aj) {
+      if (aerr) { madsLastError = aerr.message; return cb(aerr); }
+      fbRequest('GET', '/me/accounts', { fields: 'name,instagram_business_account{id,username},connected_instagram_account{id,username}', limit: 25, access_token: tok }, function (perr, pj) {
+        // tokens minted without instagram_basic can't read the IG sub-fields —
+        // degrade to plain Page names rather than failing the whole verify
+        if (perr) {
+          return fbRequest('GET', '/me/accounts', { fields: 'name', limit: 25, access_token: tok }, function (perr2, pj2) {
+            if (perr2) { madsLastError = perr.message; return cb(perr); }
+            finish(pj2, 'Token can’t read Instagram links (regenerate it with instagram_basic for @-handle delivery)');
+          });
+        }
+        finish(pj, '');
+        function finish(pjX, igFieldError) {
+        pj = pjX;
+        var accounts = (aj.data || []).map(function (a) { return { id: a.id, name: a.name || a.id, currency: a.currency || 'USD', status: a.account_status }; });
+        var pages = (pj.data || []).map(function (pg) {
+          var ig = pg.instagram_business_account || pg.connected_instagram_account || null;
+          return { id: pg.id, name: pg.name || pg.id, igUserId: ig ? String(ig.id) : '', igUsername: ig ? (ig.username || '') : '' };
+        });
+        var prev = madsConf || {};
+        madsConf = {
+          user: me.name || me.id, accounts: accounts, pages: pages,
+          adAccountId: prev.adAccountId && accounts.some(function (a) { return a.id === prev.adAccountId; }) ? prev.adAccountId : (accounts.length === 1 ? accounts[0].id : ''),
+          pageId: prev.pageId && pages.some(function (p) { return p.id === prev.pageId; }) ? prev.pageId : (pages.length === 1 ? pages[0].id : '')
+        };
+        var acct = accounts.filter(function (a) { return a.id === madsConf.adAccountId; })[0];
+        var page = pages.filter(function (p) { return p.id === madsConf.pageId; })[0];
+        madsConf.adAccountName = acct ? acct.name : ''; madsConf.currency = acct ? acct.currency : 'USD';
+        madsConf.pageName = page ? page.name : ''; madsConf.igUserId = page ? page.igUserId : ''; madsConf.igUsername = page ? page.igUsername : '';
+        madsConf.igFieldError = igFieldError || '';
+        saveMadsConf();
+        madsLastError = '';
+        cb(null, madsConf);
+        }
+      });
+    });
+  });
+}
+
+// The dark-ads chain for one round: campaign → ad set (budget + targeting,
+// Instagram placements) → per ad: media upload → creative → ad. EVERYTHING is
+// created with status PAUSED — this code can never start spending money.
+function madsDarkRun(jobId, input) {
+  var tok = effectiveMadsToken();
+  var job = igJobs[jobId];
+  var rid = String(input.roundId || '');
+  var out = { campaignId: '', adsetId: '', ads: {} };
+  // the partial result rides on the job even when the chain fails — a created
+  // campaign must never become invisible; the ledger also records it durably
+  function ledger(state) {
+    if (!rid) return;
+    madsRuns[rid] = { campaignId: out.campaignId, adsetId: out.adsetId, ads: out.ads, at: Date.now(), state: state };
+    saveMadsRuns();
+  }
+  function fail(e) {
+    if (job) { job.state = 'error'; job.error = String(e && e.message || e).slice(0, 400); job.result = out; }
+    if (out.campaignId) ledger('error');
+  }
+  function note(t) { if (job) { job.note = t; job.at = Date.now(); } }   // keep the sweeper away while progressing
+  if (!tok) return fail(new Error('no_mads_token'));
+  if (!madsConf || !madsConf.adAccountId || !madsConf.pageId) return fail(new Error('Pick the ad account and Page first (Performance → Instagram → Dark ads).'));
+  var mult = MADS_OFFSET_ONE[String(madsConf.currency || 'USD').toUpperCase()] ? 1 : 100;
+  var daily = Math.round((parseFloat(input.budget) || 0) * mult);
+  if (!(daily > 0)) return fail(new Error('bad budget'));
+  var act = '/' + madsConf.adAccountId;
+  var ads = input.ads || [];
+  // a failed earlier attempt may have left a usable paused campaign/adset —
+  // reuse them instead of manufacturing lookalike orphans
+  var reuse = (rid && madsRuns[rid] && madsRuns[rid].state === 'error' && madsRuns[rid].campaignId) ? madsRuns[rid] : null;
+  function withCampaign(cb2) {
+    if (reuse && reuse.campaignId) { out.campaignId = reuse.campaignId; note('reusing the campaign from the failed attempt…'); return cb2(); }
+    note('creating campaign…');
+    fbRequest('POST', act + '/campaigns', {
+      name: 'Ads Hub — ' + (input.roundName || 'round') + ' — ' + new Date().toISOString().slice(0, 10),
+      objective: 'OUTCOME_TRAFFIC', special_ad_categories: [], status: 'PAUSED', access_token: tok
+    }, function (cerr, cj) {
+      if (cerr) return fail(cerr);
+      out.campaignId = cj.id;
+      ledger('running');
+      cb2();
+    });
+  }
+  withCampaign(function () {
+    var targeting = {
+      geo_locations: { countries: input.countries && input.countries.length ? input.countries : ['CA'] },
+      age_min: Math.max(18, parseInt(input.ageMin, 10) || 18),
+      age_max: Math.min(65, parseInt(input.ageMax, 10) || 65),
+      publisher_platforms: input.includeFb ? ['instagram', 'facebook'] : ['instagram'],
+      instagram_positions: ['stream', 'story', 'reels']
+    };
+    if (input.includeFb) targeting.facebook_positions = ['feed'];
+    function runAds() {
+      var i = 0;
+      (function nextAd() {
+        if (i >= ads.length) {
+          if (job) { job.state = 'done'; job.result = out; }
+          ledger('done');
+          return;
+        }
+        var ad = ads[i++];
+        // already created by the failed attempt we're resuming — never remake it
+        if (out.ads[ad.adKey] && out.ads[ad.adKey].adId) return nextAd();
+        note('ad ' + i + '/' + ads.length + ': uploading media…');
+        function makeCreative(storySpec) {
+          note('ad ' + i + '/' + ads.length + ': creating creative…');
+          fbRequest('POST', act + '/adcreatives', {
+            name: 'Ads Hub — ' + (ad.name || ad.adKey),
+            object_story_spec: storySpec,
+            url_tags: 'utm_source=ig&utm_campaign=adshub&utm_content=' + encodeURIComponent(ad.adKey),
+            access_token: tok
+          }, function (crerr, crj) {
+            if (crerr) { out.ads[ad.adKey] = { error: crerr.message.slice(0, 200) }; return nextAd(); }
+            note('ad ' + i + '/' + ads.length + ': creating ad (PAUSED)…');
+            fbRequest('POST', act + '/ads', {
+              name: (ad.name || 'Ad') + ' [' + ad.adKey + ']',
+              adset_id: out.adsetId, creative: { creative_id: crj.id }, status: 'PAUSED', access_token: tok
+            }, function (aderr, adj) {
+              if (aderr) out.ads[ad.adKey] = { error: aderr.message.slice(0, 200) };
+              else out.ads[ad.adKey] = { adId: adj.id, creativeId: crj.id };
+              nextAd();
+            });
+          });
+        }
+        function withImageHash(b64, cb2) {
+          fbRequest('POST', act + '/adimages', { bytes: b64, access_token: tok }, function (ierr, ij) {
+            if (ierr) return cb2(ierr);
+            var imgs = ij.images || {};
+            var first = imgs.bytes || imgs[Object.keys(imgs)[0]];
+            if (!first || !first.hash) return cb2(new Error('Meta returned no image hash'));
+            cb2(null, first.hash);
+          });
+        }
+        if (ad.kind === 'video' && ad.videoUrl) {
+          fbRequest('POST', act + '/advideos', { file_url: PUBLIC_BASE + ad.videoUrl, access_token: tok }, function (verr, vj) {
+            if (verr) { out.ads[ad.adKey] = { error: verr.message.slice(0, 200) }; return nextAd(); }
+            var videoId = vj.id, vtries = 0;
+            (function pollVideo() {
+              fbRequest('GET', '/' + videoId, { fields: 'status', access_token: tok }, function (perr2, pj2) {
+                var st = pj2 && pj2.status && pj2.status.video_status;
+                if (!perr2 && st === 'ready') {
+                  return withImageHash(ad.thumbB64, function (therr, thash) {
+                    if (therr) { out.ads[ad.adKey] = { error: therr.message.slice(0, 200) }; return nextAd(); }
+                    makeCreative({
+                      page_id: madsConf.pageId,
+                      instagram_user_id: madsConf.igUserId || undefined,
+                      video_data: { video_id: videoId, image_hash: thash, message: ad.caption || '', call_to_action: { type: 'LEARN_MORE', value: { link: ad.link } } }
+                    });
+                  });
+                }
+                if (!perr2 && st === 'error') { out.ads[ad.adKey] = { error: 'Meta could not process the video' }; return nextAd(); }
+                if (++vtries > 36) { out.ads[ad.adKey] = { error: 'video processing timed out' }; return nextAd(); }
+                note('ad ' + i + '/' + ads.length + ': video processing…');
+                setTimeout(pollVideo, 5000);
+              });
+            })();
+          }, 300000);
+        } else {
+          withImageHash(ad.imageB64, function (ierr, hash) {
+            if (ierr) { out.ads[ad.adKey] = { error: ierr.message.slice(0, 200) }; return nextAd(); }
+            makeCreative({
+              page_id: madsConf.pageId,
+              instagram_user_id: madsConf.igUserId || undefined,
+              link_data: { link: ad.link, message: ad.caption || '', image_hash: hash, call_to_action: { type: 'LEARN_MORE', value: { link: ad.link } } }
+            });
+          });
+        }
+      })();
+    }
+    if (reuse && reuse.adsetId) {
+      out.adsetId = reuse.adsetId;
+      Object.keys(reuse.ads || {}).forEach(function (k) { if (reuse.ads[k] && reuse.ads[k].adId) out.ads[k] = reuse.ads[k]; });
+      note('resuming the failed attempt — reusing its paused campaign and ad set…');
+      return runAds();
+    }
+    note('creating ad set…');
+    fbRequest('POST', act + '/adsets', {
+      name: 'Ads Hub — ' + (input.roundName || 'round'),
+      campaign_id: out.campaignId,
+      daily_budget: daily,
+      billing_event: 'IMPRESSIONS', optimization_goal: 'LINK_CLICKS',
+      bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
+      targeting: targeting, status: 'PAUSED', access_token: tok
+    }, function (serr, sj) {
+      if (serr) return fail(serr);
+      out.adsetId = sj.id;
+      ledger('running');
+      runAds();
+    });
+  });
+}
+
 /* ---- Transcription proxy (local transcribe-hub on :3004) ------------------ */
 // The uploaded project video is already on disk — stream it to the local
 // whisper tool and let the client poll for the transcript. Nothing leaves
@@ -2117,6 +2390,130 @@ var server = http.createServer(function (req, res) {
     }, 64 * 1024);
   }
 
+  // --- Dark ads (Meta Marketing API): status + token + config + run + insights
+  if (pathname === '/api/mads/status' && req.method === 'GET') {
+    return sendJSON(res, 200, {
+      enabled: !!effectiveMadsToken(), source: madsTokenSource(),
+      ok: !madsLastError, error: madsLastError || '',
+      conf: madsConf ? {
+        user: madsConf.user || '', adAccountId: madsConf.adAccountId || '', adAccountName: madsConf.adAccountName || '',
+        currency: madsConf.currency || 'USD', pageId: madsConf.pageId || '', pageName: madsConf.pageName || '',
+        igUsername: madsConf.igUsername || '', accounts: madsConf.accounts || [], pages: madsConf.pages || []
+      } : null
+    });
+  }
+  if (pathname === '/api/mads/key' && req.method === 'POST') {
+    if (!requireAppHeader(req, res)) return;
+    return readBody(req, function (raw, overSize) {
+      if (raw == null) return sendJSON(res, 413, { error: 'too_large' });
+      var input; try { input = raw ? JSON.parse(raw) : {}; } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
+      if (MADS_ENV_TOKEN) return sendJSON(res, 200, { enabled: true, source: 'env' });
+      var k = String(input.key || '').replace(/["'“”]/g, '').replace(/\s+/g, '');
+      if (k && k.length < 30) return sendJSON(res, 400, { error: 'bad_key', message: 'That token looks too short — copy the whole System User token.' });
+      madsRuntimeToken = k;
+      if (!k) { madsTokenPersisted = false; madsLastError = ''; madsConf = null; fs.unlink(MADS_CONF_FILE, function () {}); return fs.unlink(MADS_TOKEN_FILE, function () { sendJSON(res, 200, { enabled: false, source: 'none' }); }); }
+      madsLastError = '';
+      return fs.mkdir(path.dirname(MADS_TOKEN_FILE), { recursive: true }, function () {
+        fs.writeFile(MADS_TOKEN_FILE, k, function (werr) {
+          madsTokenPersisted = !werr;
+          madsVerify(function (verr, conf) {
+            sendJSON(res, 200, { enabled: true, source: madsTokenSource(), persisted: !werr, ok: !verr, error: verr ? verr.message : '', conf: conf || null });
+          });
+        });
+      });
+    }, 16 * 1024);
+  }
+  if (pathname === '/api/mads/verify' && req.method === 'POST') {
+    if (!requireAppHeader(req, res)) return;
+    if (!effectiveMadsToken()) return sendJSON(res, 200, { enabled: false, ok: false, error: 'No token set.' });
+    return madsVerify(function (verr, conf) { sendJSON(res, 200, { enabled: true, ok: !verr, error: verr ? verr.message : '', conf: conf || null }); });
+  }
+  if (pathname === '/api/mads/config' && req.method === 'POST') {
+    if (!requireAppHeader(req, res)) return;
+    return readBody(req, function (raw) {
+      var input; try { input = raw ? JSON.parse(raw) : {}; } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
+      if (!madsConf) return sendJSON(res, 400, { error: 'no_conf', message: 'Connect the token first.' });
+      if (input.adAccountId) {
+        var acct = (madsConf.accounts || []).filter(function (a) { return a.id === input.adAccountId; })[0];
+        if (acct) { madsConf.adAccountId = acct.id; madsConf.adAccountName = acct.name; madsConf.currency = acct.currency; }
+      }
+      if (input.pageId) {
+        var page = (madsConf.pages || []).filter(function (p) { return p.id === input.pageId; })[0];
+        if (page) { madsConf.pageId = page.id; madsConf.pageName = page.name; madsConf.igUserId = page.igUserId; madsConf.igUsername = page.igUsername; }
+      }
+      saveMadsConf();
+      sendJSON(res, 200, { ok: true, adAccountId: madsConf.adAccountId, pageId: madsConf.pageId, currency: madsConf.currency, igUsername: madsConf.igUsername });
+    });
+  }
+  // Create the whole PAUSED dark-ads chain for a round. Async job, idempotent
+  // per (round + attempt) — the client polls /api/mads/job.
+  if (pathname === '/api/mads/dark' && req.method === 'POST') {
+    if (!requireAppHeader(req, res)) return;
+    if (!effectiveMadsToken()) return sendJSON(res, 501, { error: 'no_mads_token', message: 'Connect the dark-ads token first (Performance → Instagram).' });
+    return readBody(req, function (raw, overSize) {
+      if (raw == null) return sendJSON(res, 413, { error: 'too_large', message: 'Payload too big (' + Math.round(overSize / 1e6) + 'MB)' });
+      var input; try { input = raw ? JSON.parse(raw) : {}; } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
+      if (!Array.isArray(input.ads) || !input.ads.length) return sendJSON(res, 400, { error: 'bad_args', message: 'ads required' });
+      if (!(parseFloat(input.budget) > 0)) return sendJSON(res, 400, { error: 'bad_args', message: 'a positive daily budget is required' });
+      if (!input.roundId) return sendJSON(res, 400, { error: 'bad_args', message: 'roundId required' });
+      var idem = String(input.idem || '').slice(0, 120);
+      if (idem && igJobs[idem] && igJobs[idem].state !== 'error') {
+        return sendJSON(res, 200, { ok: true, job: idem, state: igJobs[idem].state });
+      }
+      // durable dedupe: a FIRST run for a round that already completed one
+      // (browser crashed before storing it, server restarted, job swept)
+      // returns the recorded campaign instead of building a lookalike twin.
+      // Deliberate re-runs use a campaignId-suffixed idem and pass through.
+      var ridReq = String(input.roundId);
+      if (/:first$/.test(idem) && madsRuns[ridReq] && madsRuns[ridReq].state === 'done' && madsRuns[ridReq].campaignId) {
+        var healId = 'heal-' + Date.now().toString(36) + crypto.randomBytes(3).toString('hex');
+        igJobs[healId] = { state: 'done', at: Date.now(), result: { campaignId: madsRuns[ridReq].campaignId, adsetId: madsRuns[ridReq].adsetId, ads: madsRuns[ridReq].ads || {} } };
+        return sendJSON(res, 200, { ok: true, job: healId, state: 'done', recovered: true });
+      }
+      var jobId = idem || ('mads-' + Date.now().toString(36) + crypto.randomBytes(4).toString('hex'));
+      igJobs[jobId] = { state: 'running', at: Date.now(), note: 'starting…' };
+      madsDarkRun(jobId, input);
+      sendJSON(res, 200, { ok: true, job: jobId, state: 'running' });
+    }, 80 * 1024 * 1024);
+  }
+  if (pathname === '/api/mads/job' && req.method === 'GET') {
+    if (!requireAppHeader(req, res)) return;
+    var mj = igJobs[String(parsed.query.job || '').slice(0, 120)];
+    if (!mj) return sendJSON(res, 404, { error: 'unknown_job' });
+    return sendJSON(res, 200, { ok: true, state: mj.state, note: mj.note || '', result: mj.result || null, error: mj.error || '' });
+  }
+  if (pathname === '/api/mads/insights' && req.method === 'POST') {
+    if (!requireAppHeader(req, res)) return;
+    if (!effectiveMadsToken()) return sendJSON(res, 501, { error: 'no_mads_token' });
+    return readBody(req, function (raw) {
+      var input; try { input = raw ? JSON.parse(raw) : {}; } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
+      var ids = (Array.isArray(input.ids) ? input.ids : []).slice(0, 60).map(String);
+      if (!ids.length) return sendJSON(res, 400, { error: 'bad_args' });
+      var tok = effectiveMadsToken(), byId = {}, i = 0;
+      (function next() {
+        if (i >= ids.length) return sendJSON(res, 200, { ok: true, byId: byId, at: new Date().toISOString() });
+        var id = ids[i++];
+        fbRequest('GET', '/' + id, { fields: 'effective_status,name', access_token: tok }, function (serr, sj) {
+          if (serr) { byId[id] = { error: serr.message.slice(0, 200) }; return next(); }
+          fbRequest('GET', '/' + id + '/insights', { fields: 'impressions,reach,clicks,ctr,spend,cpc', date_preset: 'maximum', access_token: tok }, function (ierr, ij) {
+            var row = (ij && ij.data && ij.data[0]) || {};
+            byId[id] = {
+              status: sj.effective_status || '',
+              impressions: row.impressions != null ? +row.impressions : null,
+              reach: row.reach != null ? +row.reach : null,
+              clicks: row.clicks != null ? +row.clicks : null,
+              ctr: row.ctr != null ? +(+row.ctr).toFixed(2) : null,
+              spend: row.spend != null ? +row.spend : null,
+              cpc: row.cpc != null ? +(+row.cpc).toFixed(2) : null
+            };
+            if (ierr) byId[id].insightsError = ierr.message.slice(0, 150);
+            next();
+          });
+        });
+      })();
+    }, 64 * 1024);
+  }
+
   // --- Render ONE image with Nano Banana from a concept prompt (+ references) ---
   if (pathname === '/api/ai/genimage' && req.method === 'POST') {
     if (!effectiveGeminiKey()) return sendJSON(res, 501, { error: 'no_gemini_key', message: 'Add your Nano Banana (Gemini) API key in Brand Kit to render real images.' });
@@ -2724,7 +3121,8 @@ server.listen(PORT, '127.0.0.1', function () {
       });
     });
     Object.keys(igJobs).forEach(function (k) {
-      if (Date.now() - igJobs[k].at > 3600 * 1000) delete igJobs[k];
+      // never sweep a job that is still progressing (note() refreshes .at)
+      if (igJobs[k].state !== 'running' && Date.now() - igJobs[k].at > 3600 * 1000) delete igJobs[k];
     });
   }
   pubSweep();

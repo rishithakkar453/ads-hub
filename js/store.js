@@ -258,6 +258,7 @@ window.Ads = window.Ads || {};
     if (!state.tracking || typeof state.tracking !== 'object') state.tracking = { spend: {}, snapshot: null, syncedAt: null };
     if (!state.tracking.spend) state.tracking.spend = {};
     if (!state.tracking.ig) state.tracking.ig = { byId: {}, syncedAt: null };   // synced Instagram per-post insights
+    if (!state.tracking.dark) state.tracking.dark = { byId: {}, syncedAt: null };   // synced dark-ad (Marketing API) metrics
     if (!state.prefs || !state.prefs.liked) state.prefs = { liked: [], disliked: [] };
     if (!Array.isArray(state.projects)) state.projects = [];
     state.projects.forEach(function (p) {
@@ -343,6 +344,7 @@ window.Ads = window.Ads || {};
       if (!state.tracking) state.tracking = { spend: {}, snapshot: null, syncedAt: null };
       if (!state.tracking.spend) state.tracking.spend = {};
       if (!state.tracking.ig) state.tracking.ig = { byId: {}, syncedAt: null };
+      if (!state.tracking.dark) state.tracking.dark = { byId: {}, syncedAt: null };
       return state.tracking;
     },
     setTrackSnapshot: function (snap) {
@@ -354,6 +356,12 @@ window.Ads = window.Ads || {};
       var t = store.getTracking();
       Object.keys(byId || {}).forEach(function (id) { t.ig.byId[id] = byId[id]; });
       t.ig.syncedAt = util.nowISO(); commit();
+    },
+    // merge freshly synced dark-ad metrics (keyed by Meta ad id)
+    setTrackDark: function (byId) {
+      var t = store.getTracking();
+      Object.keys(byId || {}).forEach(function (id) { t.dark.byId[id] = byId[id]; });
+      t.dark.syncedAt = util.nowISO(); commit();
     },
     setTrackSpend: function (adKey, val) {
       var t = store.getTracking();

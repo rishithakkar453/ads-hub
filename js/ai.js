@@ -307,6 +307,63 @@ window.Ads = window.Ads || {};
       });
     });
   }
+  /* ---- Dark ads (Meta Marketing API) -------------------------------------- */
+  function madsStatus() {
+    return fetch('/api/mads/status').then(function (r) { return r.json(); }).catch(function () { return { enabled: false }; });
+  }
+  function setMadsKey(key) {
+    return fetch('/api/mads/key', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ads-Hub': '1' }, body: JSON.stringify({ key: key }) })
+      .then(function (r) { return r.json().then(function (b) { if (!r.ok) throw new Error(b && b.message || 'Token error (' + r.status + ')'); return b; }); });
+  }
+  function madsVerify() {
+    return fetch('/api/mads/verify', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ads-Hub': '1' } })
+      .then(function (r) { return r.json(); }).catch(function () { return { enabled: true, ok: false, error: 'Could not reach the checker' }; });
+  }
+  function madsConfig(sel) {
+    return fetch('/api/mads/config', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ads-Hub': '1' }, body: JSON.stringify(sel) })
+      .then(function (r) { return r.json().then(function (b) { if (!r.ok) throw new Error(b && b.message || 'Config error'); return b; }); });
+  }
+  // Create the PAUSED dark-ads chain; polls the job and reports progress notes.
+  function madsDark(payload, onNote) {
+    return fetch('/api/mads/dark', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ads-Hub': '1' }, body: JSON.stringify(payload)
+    }).then(function (r) {
+      return r.json().then(function (b) {
+        if (r.status === 501) { var e = new Error(b && b.message || 'Dark ads not connected'); e.noKey = true; throw e; }
+        if (!r.ok) throw new Error(b && b.message || 'Dark-ads run failed (' + r.status + ')');
+        return b.job;
+      });
+    }).then(function (job) {
+      return new Promise(function (resolve, reject) {
+        var waited = 0;
+        (function poll() {
+          fetch('/api/mads/job?job=' + encodeURIComponent(job), { headers: { 'X-Ads-Hub': '1' } })
+            .then(function (r) { return r.json(); })
+            .then(function (s) {
+              if (s.note && onNote) onNote(s.note);
+              if (s.state === 'done') return resolve(s.result);
+              if (s.state === 'error') {
+                var de = new Error(s.error || 'Meta rejected the dark-ads run');
+                de.partial = s.result || null;   // a campaign may already exist — surface it
+                return reject(de);
+              }
+              waited += 3000;
+              if (waited > 15 * 60 * 1000) return reject(new Error('Still running after 15 minutes — check Ads Manager before retrying'));
+              setTimeout(poll, 3000);
+            })
+            .catch(function () { waited += 3000; setTimeout(poll, 3000); });
+        })();
+      });
+    });
+  }
+  function madsInsights(ids) {
+    return fetch('/api/mads/insights', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ads-Hub': '1' }, body: JSON.stringify({ ids: ids })
+    }).then(function (r) {
+      return r.json().then(function (b) { if (!r.ok) throw new Error(b && b.message || 'Insights failed'); return b; });
+    });
+  }
+
   function metaInsights(ids) {
     return fetch('/api/meta/insights', {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ads-Hub': '1' }, body: JSON.stringify({ ids: ids })
@@ -315,5 +372,5 @@ window.Ads = window.Ads || {};
     });
   }
 
-  Ads.ai = { status: status, setKey: setKey, generateCopy: generateCopy, generateDossier: generateDossier, research: research, audience: audience, landingContent: landingContent, imageConcepts: imageConcepts, genImage: genImage, genImages: genImages, genClip: genClip, geminiStatus: geminiStatus, setGeminiKey: setGeminiKey, geminiVerify: geminiVerify, metaStatus: metaStatus, setMetaKey: setMetaKey, metaVerify: metaVerify, metaStage: metaStage, metaPost: metaPost, metaInsights: metaInsights, mediaPlan: mediaPlan, variationToSpec: variationToSpec, scrape: scrape, editSpec: editSpec };
+  Ads.ai = { status: status, setKey: setKey, generateCopy: generateCopy, generateDossier: generateDossier, research: research, audience: audience, landingContent: landingContent, imageConcepts: imageConcepts, genImage: genImage, genImages: genImages, genClip: genClip, geminiStatus: geminiStatus, setGeminiKey: setGeminiKey, geminiVerify: geminiVerify, metaStatus: metaStatus, setMetaKey: setMetaKey, metaVerify: metaVerify, metaStage: metaStage, metaPost: metaPost, metaInsights: metaInsights, madsStatus: madsStatus, setMadsKey: setMadsKey, madsVerify: madsVerify, madsConfig: madsConfig, madsDark: madsDark, madsInsights: madsInsights, mediaPlan: mediaPlan, variationToSpec: variationToSpec, scrape: scrape, editSpec: editSpec };
 })();
