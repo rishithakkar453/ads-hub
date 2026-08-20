@@ -1342,6 +1342,9 @@ function madsDarkRun(jobId, input) {
       instagram_positions: ['stream', 'story', 'reels']
     };
     if (input.includeFb) targeting.facebook_positions = ['feed'];
+    // required flag: explicitly DISABLE Advantage+ audience expansion — the
+    // whole point of this targeting is precision, Meta must not widen it
+    targeting.targeting_automation = { advantage_audience: 0 };
     // precision aim: gender + detailed-targeting interests resolved against
     // Meta's catalog client-side ({id,name} pairs from /api/mads/interests)
     if (Array.isArray(input.genders) && input.genders.length) targeting.genders = input.genders.map(function (g) { return parseInt(g, 10); }).filter(Boolean);

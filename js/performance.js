@@ -1448,6 +1448,14 @@ window.Ads = window.Ads || {};
     }).filter(Boolean);
     if (!items.length) return Ads.toast('No ads in this round', true);
     var priorIn = (r.plan && r.plan.input) || {};
+    // targeting is remembered per round — an Optimize (or manual setup) done
+    // once prefills every later visit
+    var savedT = r.darkTargeting || null;
+    var tBudget = (savedT && savedT.budget) || (priorIn.budget && +priorIn.budget <= 100 ? priorIn.budget : '');
+    var tCountries = (savedT && savedT.countries) || 'CA, US';
+    var tAgeMin = (savedT && savedT.ageMin) || 25;
+    var tAgeMax = (savedT && savedT.ageMax) || 65;
+    var tGender = (savedT && savedT.gender) || 'all';
     var rows = items.map(function (it) {
       return '<div class="igpost-row">' +
         '<div class="igpost-row-thumb cr-stage-scaler" data-dkt="' + esc(it.key) + '"></div>' +
@@ -1456,6 +1464,21 @@ window.Ads = window.Ads || {};
         '<div class="igpost-row-state" data-dkstate="' + esc(it.key) + '">ready</div>' +
       '</div>';
     }).join('');
+    // remember the whole targeting setup on the round so reopening the modal
+    // (or reloading) never loses an Optimize or manual tweaks
+    function persistTargeting(m, why) {
+      updateRound(pid, rid, { darkTargeting: {
+        budget: m.querySelector('#dk-budget').value.trim(),
+        countries: m.querySelector('#dk-countries').value,
+        ageMin: m.querySelector('#dk-agemin').value,
+        ageMax: m.querySelector('#dk-agemax').value,
+        gender: m.querySelector('#dk-gender').value,
+        includeFb: m.querySelector('#dk-fb').checked,
+        interests: (m.__ints || []).slice(),
+        why: why != null ? why : ((m.querySelector('#dk-why') || {}).textContent || ''),
+        at: util.nowISO()
+      } });
+    }
     Ads.modal({
       title: '🌑 Dark ads for ' + (r.name || 'this round'), wide: true,
       body: '<p class="u-muted">Creates one paused campaign in ad account <strong>' + esc(conf.adAccountName || conf.adAccountId) + '</strong>' +
@@ -1463,12 +1486,14 @@ window.Ads = window.Ads || {};
           ' — none of it appears on the profile, and nothing spends until you activate the ads in Ads Manager.</p>' +
         (r.dark && r.dark.campaignId ? '<div class="hint" style="margin-bottom:1rem">⚠ This round already has a dark campaign — running again creates a NEW one (the old one stays in Ads Manager).</div>' : '') +
         '<div class="pp-quick">' +
-          '<div class="field" style="max-width:17rem;margin:0"><label>Daily budget (' + esc(conf.currency || 'USD') + ') — whole round</label><input class="input" id="dk-budget" inputmode="decimal" placeholder="20" value="' + esc(priorIn.budget && +priorIn.budget <= 100 ? priorIn.budget : '') + '"></div>' +
-          '<div class="field" style="max-width:16rem;margin:0"><label>Countries</label><input class="input" id="dk-countries" value="CA, US" placeholder="CA, US, GB…"></div>' +
-          '<div class="field" style="max-width:8rem;margin:0"><label>Age min</label><input class="input" id="dk-agemin" inputmode="numeric" value="25"></div>' +
-          '<div class="field" style="max-width:8rem;margin:0"><label>Age max</label><input class="input" id="dk-agemax" inputmode="numeric" value="65"></div>' +
-          '<div class="field" style="max-width:11rem;margin:0"><label>Gender</label><select class="select" id="dk-gender"><option value="all">Everyone</option><option value="women">Women</option><option value="men">Men</option></select></div>' +
-          '<label class="pp-chip" style="align-self:flex-end"><input type="checkbox" id="dk-fb"><span>also Facebook feed</span></label>' +
+          '<div class="field" style="max-width:17rem;margin:0"><label>Daily budget (' + esc(conf.currency || 'USD') + ') — whole round</label><input class="input" id="dk-budget" inputmode="decimal" placeholder="20" value="' + esc(tBudget) + '"></div>' +
+          '<div class="field" style="max-width:16rem;margin:0"><label>Countries</label><input class="input" id="dk-countries" value="' + esc(tCountries) + '" placeholder="CA, US, GB…"></div>' +
+          '<div class="field" style="max-width:8rem;margin:0"><label>Age min</label><input class="input" id="dk-agemin" inputmode="numeric" value="' + esc(tAgeMin) + '"></div>' +
+          '<div class="field" style="max-width:8rem;margin:0"><label>Age max</label><input class="input" id="dk-agemax" inputmode="numeric" value="' + esc(tAgeMax) + '"></div>' +
+          '<div class="field" style="max-width:11rem;margin:0"><label>Gender</label><select class="select" id="dk-gender">' +
+            ['all', 'women', 'men'].map(function (g) { return '<option value="' + g + '"' + (g === tGender ? ' selected' : '') + '>' + (g === 'all' ? 'Everyone' : g.charAt(0).toUpperCase() + g.slice(1)) + '</option>'; }).join('') +
+          '</select></div>' +
+          '<label class="pp-chip" style="align-self:flex-end"><input type="checkbox" id="dk-fb"' + (savedT && savedT.includeFb ? ' checked' : '') + '><span>also Facebook feed</span></label>' +
         '</div>' +
         '<p class="u-faint" style="margin:0.4rem 0 1rem;font-size:1.12rem">One shared daily budget for the round — Meta automatically shifts it toward the ads that perform best.</p>' +
         '<div class="field"><label>Detailed targeting — interests (from Meta’s catalog)</label>' +
@@ -1522,13 +1547,20 @@ window.Ads = window.Ads || {};
             m.__ints.push(top); renderInts(); disarm();
           }).catch(function (e) { if (!silent) Ads.toast(e.message, true); });
         }
+        // restore the remembered targeting (interests + reasoning)
+        if (savedT) {
+          m.__ints = (savedT.interests || []).slice();
+          renderInts();
+          var whyEl0 = m.querySelector('#dk-why');
+          if (whyEl0 && savedT.why) whyEl0.textContent = savedT.why;
+        }
         var intAdd = m.querySelector('#dk-int-add');
         intAdd.addEventListener('keydown', function (e) {
           if (e.key !== 'Enter') return;
           e.preventDefault();
           var q = intAdd.value.trim(); if (!q) return;
           intAdd.value = '';
-          addInterest(q, false);
+          addInterest(q, false).then(function () { persistTargeting(m); });
         });
         m.querySelector('#dk-opt').addEventListener('click', function () {
           var why = m.querySelector('#dk-why');
@@ -1555,6 +1587,7 @@ window.Ads = window.Ads || {};
               if (qi >= kws.length) {
                 optBtn.disabled = false; optBtn.textContent = '✨ Optimize targeting for this round';
                 if (why) why.textContent = (t.why || '') + (m.__ints.length ? ' — ' + m.__ints.length + ' interests matched in Meta’s catalog.' : ' — no interests matched; add some manually.');
+                persistTargeting(m);   // the optimized setup survives closing the modal
                 return;
               }
               addInterest(kws[qi++], true).then(nextKw);
@@ -1579,6 +1612,7 @@ window.Ads = window.Ads || {};
           return;
         }
         if (goBtn) { goBtn.disabled = true; goBtn.innerHTML = '<span class="spinner"></span> Working…'; }
+        persistTargeting(m);   // whatever launches is what's remembered
         var status = m.querySelector('#dk-status');
         function setRow(key, html) { var el2 = m.querySelector('[data-dkstate="' + key + '"]'); if (el2) el2.innerHTML = html; }
         // 1. render every creative locally (images → JPEG bytes, videos → MP4
