@@ -1343,7 +1343,9 @@ window.Ads = window.Ads || {};
           '<span class="u-faint">' + (it.spec.kind === 'video' ? 'publishes as a Reel' : 'publishes as a feed photo') + '</span>' +
           '<div class="igpost-cap">' + esc(igCaptionFor(it.spec).slice(0, 220)) + '</div>' +
         '</div>' +
-        '<div class="igpost-row-state" data-igstate="' + esc(it.key) + '">' + (it.posted ? '✓ already posted — skipped' : 'ready') + '</div>' +
+        '<div class="igpost-row-state" data-igstate="' + esc(it.key) + '">' + (it.posted
+          ? '✓ posted<br><label style="cursor:pointer;user-select:none"><input type="checkbox" data-igrepost="' + esc(it.key) + '"> post again</label>'
+          : 'ready') + '</div>' +
       '</div>';
     }).join('');
     Ads.modal({
@@ -1360,6 +1362,16 @@ window.Ads = window.Ads || {};
           var it = items.filter(function (x) { return x.key === n.getAttribute('data-igt'); })[0];
           if (it) { try { mountThumbFitted(n, it.spec, 90, 110); } catch (e) {} }
         });
+        // ticking "post again" on an already-posted ad adds it to the run;
+        // the button count follows and any armed confirm resets
+        m.querySelectorAll('[data-igrepost]').forEach(function (c) {
+          c.addEventListener('change', function () {
+            var goBtn = m.querySelector('[data-mact="go"]');
+            var n = fresh.length + m.querySelectorAll('[data-igrepost]:checked').length;
+            if (goBtn) goBtn.textContent = 'Post ' + n + ' ad' + (n === 1 ? '' : 's') + ' now';
+            m.__igArmed = false;
+          });
+        });
       },
       onAction: function (act, m) {
         if (act === 'cancel') return Ads.closeModal();
@@ -1368,8 +1380,12 @@ window.Ads = window.Ads || {};
         // so pressing the button again can only ever post what isn't live yet
         var pNow = store.getProject(pid);
         var rNow = pNow && projRounds(pNow).filter(function (x) { return x.id === rid; })[0];
-        var pending = items.filter(function (it) { return !((rNow && rNow.igPosts || {})[it.key]); });
-        if (!pending.length) { Ads.toast('Everything in this round is already posted'); return Ads.closeModal(); }
+        var postedNow = (rNow && rNow.igPosts) || {};
+        var repost = {};
+        m.querySelectorAll('[data-igrepost]').forEach(function (c) { if (c.checked) repost[c.getAttribute('data-igrepost')] = 1; });
+        var pending = items.filter(function (it) { return !postedNow[it.key] || repost[it.key]; });
+        pending.forEach(function (it) { it.priorId = postedNow[it.key] ? String(postedNow[it.key].id || 'r') : ''; });
+        if (!pending.length) { Ads.toast('Everything is already posted — tick “post again” on an ad to repost it', true); return; }
         var goBtn = m.querySelector('[data-mact="go"]');
         // explicit two-press confirm: nothing publishes on the first click
         if (!m.__igArmed) {
@@ -1410,7 +1426,10 @@ window.Ads = window.Ads || {};
             setRow(it.key, '<span class="spinner"></span> uploading…');
             return ai().metaStage(media.blob, media.name).then(function (staged) {
               setRow(it.key, '<span class="spinner"></span> publishing' + (media.kind === 'video' ? ' (reels take a minute)…' : '…'));
-              return ai().metaPost({ kind: media.kind, url: staged.url, caption: igCaptionFor(it.spec), idem: rid + ':' + it.key });
+              // deliberate reposts get a new idempotency key (suffixed with the
+              // prior media id) so the anti-double-post lock doesn't block them,
+              // while retries of THIS attempt still collapse into one job
+              return ai().metaPost({ kind: media.kind, url: staged.url, caption: igCaptionFor(it.spec), idem: rid + ':' + it.key + (it.priorId ? ':' + it.priorId : '') });
             });
           }).then(function (out) {
             done++;
