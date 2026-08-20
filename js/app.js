@@ -71,6 +71,7 @@ Ads.registerView = function (id, def) { Ads.views[id] = def; };
     { id: 'performance', label: 'Ad Performance', short: 'Performance', sub: 'Track + optimize', icon: icons.performance, views: [
       { id: 'dashboard', label: 'Dashboard', icon: icons.dashboard },
       { id: 'rounds', label: 'Campaign Rounds', icon: icons.archive },
+      { id: 'instagram', label: 'Instagram', icon: icons.rocket },
       { id: 'tracking', label: 'Live Tracking', icon: icons.globe },
       { id: 'ads', label: 'All Ads', icon: icons.ads },
       { id: 'compare', label: 'Compare', icon: icons.compare },
@@ -452,13 +453,8 @@ Ads.registerView = function (id, def) { Ads.views[id] = def; };
             '<div class="btn-row"><button class="btn is-sm" id="b-gem-save">Save key</button>' +
               '<button class="btn is-ghost is-sm" id="b-gem-forget">Forget key</button></div>' +
             '<div class="hint" id="b-gem-state" style="margin-top:0.8rem"></div>' +
-            '<div class="card-head" style="margin-top:2.4rem"><h3>Instagram — direct posting</h3></div>' +
-            '<p class="u-muted">Connect your Instagram professional account and the 🚀 button in Campaign Rounds publishes ads straight to your feed/Reels, then pulls each post’s views, reach, likes, saves and shares back onto the folder page. Setup (no Facebook Page needed): <strong>developers.facebook.com</strong> → create an app → add the <strong>Instagram</strong> product → “API setup with Instagram business login” → log in with the IG account → paste the access token here. It’s saved on this computer and auto-renewed.</p>' +
-            '<div class="field" style="margin-top:1rem"><label>Instagram access token</label>' +
-              '<input class="input" type="password" id="b-ig-key" placeholder="IGAA… (paste to connect, leave blank to keep current)" autocomplete="off" spellcheck="false"></div>' +
-            '<div class="btn-row"><button class="btn is-sm" id="b-ig-save">Connect</button>' +
-              '<button class="btn is-ghost is-sm" id="b-ig-forget">Disconnect</button></div>' +
-            '<div class="hint" id="b-ig-state" style="margin-top:0.8rem"></div>' +
+            // Instagram connection lives on its own page: Performance → Instagram
+            '<p class="u-muted" style="margin-top:2.4rem">Instagram direct posting moved to <strong>Performance → Instagram</strong>.</p>' +
           '</div>' +
         '</div>';
       var accent = el.querySelector('#b-accent'), accentHex = el.querySelector('#b-accent-hex');
@@ -520,42 +516,6 @@ Ads.registerView = function (id, def) { Ads.views[id] = def; };
           title: 'Forget the Nano Banana key?', message: 'Image generation falls back to concept previews until you paste a key again.',
           danger: true, okLabel: 'Forget key',
           onConfirm: function () { ai.setGeminiKey('').then(function () { toast('Nano Banana key forgotten'); refreshGemState(); }).catch(function (e) { toast(e.message, true); }); }
-        });
-      });
-      // Instagram direct-posting token
-      var igState = el.querySelector('#b-ig-state');
-      function refreshIgState() {
-        if (!igState) return;
-        ai.metaStatus().then(function (g) {
-          if (g && g.enabled && g.ok === false) {
-            igState.innerHTML = '<strong style="color:var(--danger,#e5484d)">⚠ Instagram is rejecting this token.</strong> ' + esc(g.error || '') +
-              ' Generate a fresh token in your Meta developer app (Instagram → API setup with Instagram business login) and paste it again.';
-          } else if (g && g.enabled) {
-            igState.textContent = '✓ Connected' + (g.username ? ' as @' + g.username : '') + ' — the 🚀 button in Campaign Rounds posts directly and syncs per-post insights. Token renews itself.';
-          } else {
-            igState.textContent = 'Not connected — paste the access token from your Meta developer app to post directly from Ads Hub.';
-          }
-        });
-      }
-      refreshIgState();
-      var igSave = el.querySelector('#b-ig-save');
-      if (igSave) igSave.addEventListener('click', function () {
-        var k = el.querySelector('#b-ig-key').value.trim();
-        if (!k) { toast('Paste the Instagram access token first', true); return; }
-        igState.innerHTML = '<span class="spinner"></span> Saving & checking with Instagram…';
-        ai.setMetaKey(k).then(function (resp) {
-          el.querySelector('#b-ig-key').value = '';
-          if (resp && resp.ok === false) toast('Token saved, but Instagram rejects it: ' + (resp.error || 'invalid token'), true);
-          else toast('Instagram connected' + (resp && resp.username ? ' as @' + resp.username : '') + ' — direct posting is on');
-          refreshIgState();
-        }).catch(function (e) { toast(e.message, true); refreshIgState(); });
-      });
-      var igForget = el.querySelector('#b-ig-forget');
-      if (igForget) igForget.addEventListener('click', function () {
-        confirm({
-          title: 'Disconnect Instagram?', message: 'Direct posting turns off until you paste a token again. Published posts stay up.',
-          danger: true, okLabel: 'Disconnect',
-          onConfirm: function () { ai.setMetaKey('').then(function () { toast('Instagram disconnected'); refreshIgState(); }).catch(function (e) { toast(e.message, true); }); }
         });
       });
       var kf = el.querySelector('#b-key-forget');

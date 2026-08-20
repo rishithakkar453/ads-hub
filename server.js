@@ -71,7 +71,15 @@ var igTokenPersisted = false;
 if (!IG_ENV_TOKEN) {
   try { var _igt = fs.readFileSync(IG_TOKEN_FILE, 'utf8').trim(); if (_igt) { igRuntimeToken = _igt; igTokenPersisted = true; } } catch (e) {}
 }
-function effectiveIgToken() { return IG_ENV_TOKEN || igRuntimeToken; }
+function effectiveIgToken() {
+  if (IG_ENV_TOKEN) return IG_ENV_TOKEN;
+  // two instances share this file (docker + host tunnel) — if the OTHER one
+  // saved the token, pick it up lazily instead of waiting for a restart
+  if (!igRuntimeToken) {
+    try { var t = fs.readFileSync(IG_TOKEN_FILE, 'utf8').trim(); if (t) { igRuntimeToken = t; igTokenPersisted = true; } } catch (e) {}
+  }
+  return igRuntimeToken;
+}
 function igTokenSource() { return IG_ENV_TOKEN ? 'env' : (igRuntimeToken ? (igTokenPersisted ? 'saved' : 'session') : 'none'); }
 var igLastError = '';
 var igUser = null;                 // { id, username } from the last verify
@@ -1995,8 +2003,10 @@ var server = http.createServer(function (req, res) {
       if (raw == null) return sendJSON(res, 413, { error: 'too_large' });   // an oversized body must NOT read as "clear the token"
       var input; try { input = raw ? JSON.parse(raw) : {}; } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
       if (IG_ENV_TOKEN) return sendJSON(res, 200, { enabled: true, source: 'env', note: 'A token is already set via IG_ACCESS_TOKEN.' });
-      var k = String(input.key || '').trim();
-      if (k && (k.length < 30 || /\s/.test(k))) return sendJSON(res, 400, { error: 'bad_key', message: 'That doesn’t look like an Instagram access token.' });
+      // copying from Meta's token dialog often drags along line breaks, spaces
+      // or quotes — clean them instead of rejecting the paste
+      var k = String(input.key || '').replace(/["'“”]/g, '').replace(/\s+/g, '');
+      if (k && k.length < 30) return sendJSON(res, 400, { error: 'bad_key', message: 'That token looks too short — copy the entire IGAA… string from the Generate token dialog.' });
       igRuntimeToken = k;
       if (!k) { igTokenPersisted = false; igLastError = ''; igUser = null; return fs.unlink(IG_TOKEN_FILE, function () { sendJSON(res, 200, { enabled: false, source: 'none' }); }); }
       igLastError = '';
@@ -2049,7 +2059,7 @@ var server = http.createServer(function (req, res) {
   // so a proxy-killed response can never cause a duplicate Instagram post.
   if (pathname === '/api/meta/post' && req.method === 'POST') {
     if (!requireAppHeader(req, res)) return;
-    if (!effectiveIgToken()) return sendJSON(res, 501, { error: 'no_ig_token', message: 'Connect Instagram in Brand Kit first.' });
+    if (!effectiveIgToken()) return sendJSON(res, 501, { error: 'no_ig_token', message: 'Connect Instagram first (Performance → Instagram).' });
     return readBody(req, function (raw, overSize) {
       if (raw == null) return sendJSON(res, 413, { error: 'too_large' });
       var input; try { input = raw ? JSON.parse(raw) : {}; } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }

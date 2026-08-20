@@ -741,6 +741,69 @@ window.Ads = window.Ads || {};
 
   var roundsOpenProject = null;   // project id while a folder is open as a page
 
+  /* ---- Instagram connection page (Performance → Instagram) ---------------- */
+  Ads.registerView('instagram', {
+    title: 'Instagram', mode: 'performance',
+    render: function (el) {
+      el.innerHTML = '<div class="view-section">' +
+        '<div class="section-head"><h2>Instagram — direct posting</h2></div>' +
+        '<div class="card" style="max-width:76rem;padding:2.4rem 2.8rem">' +
+          '<div class="hint" id="ig-state" style="margin-bottom:1.6rem"><span class="spinner"></span> Checking connection…</div>' +
+          '<p class="u-muted">Connected, the <strong>🚀 button on a round’s page</strong> publishes its ads straight to your Instagram feed/Reels with tracked links in the captions, and <strong>Sync live stats</strong> pulls each post’s views, reach, likes, comments and saves back onto the round.</p>' +
+          '<div class="field" style="margin-top:1.6rem"><label>Instagram access token</label>' +
+            '<input class="input" type="password" id="ig-key" placeholder="IGAA… (paste the token from your Meta developer app)" autocomplete="off" spellcheck="false"></div>' +
+          '<div class="btn-row"><button class="btn is-primary is-sm" id="ig-save">Connect</button>' +
+            '<button class="btn is-ghost is-sm" id="ig-forget">Disconnect</button></div>' +
+          '<details style="margin-top:2rem"><summary class="u-label" style="cursor:pointer">Where the token comes from (one-time setup)</summary>' +
+            '<ol style="margin:1.2rem 0 0.4rem 2rem;line-height:1.9;font-size:1.28rem">' +
+              '<li>Instagram app: switch to a <strong>professional account</strong> (Settings → Account type)</li>' +
+              '<li><strong>developers.facebook.com</strong> → create an app → add the <strong>Instagram</strong> use case</li>' +
+              '<li>App roles → add your IG username as <strong>Instagram Tester</strong> → accept at instagram.com/accounts/manage_access (Tester invites tab)</li>' +
+              '<li>Use cases → Customize → <strong>API setup with Instagram business login</strong> → Add account → log in with Instagram → <strong>Generate token</strong></li>' +
+              '<li>Copy the whole <code>IGAA…</code> string and paste it above — it verifies instantly and renews itself</li>' +
+            '</ol></details>' +
+        '</div></div>';
+      var st = el.querySelector('#ig-state');
+      function refresh() {
+        ai().metaStatus().then(function (g) {
+          if (g && g.enabled && g.ok === false) {
+            st.innerHTML = '<strong style="color:var(--bad,#e5704f)">⚠ Instagram is rejecting the saved token.</strong> ' + esc(g.error || '') + ' Generate a fresh token (step 4 below) and paste it again.';
+          } else if (g && g.enabled) {
+            st.innerHTML = '✓ <strong>Connected' + (g.username ? ' as @' + esc(g.username) : '') + '</strong> — 🚀 posting and insights sync are live. The token renews itself.';
+          } else {
+            st.textContent = 'Not connected yet — paste the access token below.';
+          }
+        });
+      }
+      refresh();
+      el.querySelector('#ig-save').addEventListener('click', function () {
+        var k = el.querySelector('#ig-key').value;
+        if (!k.trim()) { Ads.toast('Paste the token first', true); return; }
+        st.innerHTML = '<span class="spinner"></span> Saving & verifying with Instagram…';
+        ai().setMetaKey(k).then(function (resp) {
+          el.querySelector('#ig-key').value = '';
+          if (resp && resp.ok === false) {
+            st.innerHTML = '<strong style="color:var(--bad,#e5704f)">Instagram rejected the token:</strong> ' + esc(resp.error || 'invalid token') + ' — make sure you copied the whole IGAA… string from Generate token (not the App ID or secret).';
+            Ads.toast('Token saved but Instagram rejects it — details above', true);
+          } else {
+            Ads.toast('Instagram connected' + (resp && resp.username ? ' as @' + resp.username : ''));
+            refresh();
+          }
+        }).catch(function (e) {
+          st.innerHTML = '<strong style="color:var(--bad,#e5704f)">Could not save the token:</strong> ' + esc(e.message || 'unknown error') + ' — try pasting again.';
+          Ads.toast(e.message, true);
+        });
+      });
+      el.querySelector('#ig-forget').addEventListener('click', function () {
+        Ads.confirm({
+          title: 'Disconnect Instagram?', message: 'Direct posting turns off until you paste a token again. Published posts stay up.',
+          danger: true, okLabel: 'Disconnect',
+          onConfirm: function () { ai().setMetaKey('').then(function () { Ads.toast('Instagram disconnected'); refresh(); }).catch(function (e) { Ads.toast(e.message, true); }); }
+        });
+      });
+    }
+  });
+
   Ads.registerView('rounds', {
     title: function () {
       if (roundsOpenProject) { var p = store.getProject(roundsOpenProject); if (p) return '📁 ' + (p.name || 'Project'); }
@@ -1169,7 +1232,7 @@ window.Ads = window.Ads || {};
         if (st && st.enabled) {
           return ai().metaVerify().then(function (v) {
             if (v && v.ok) return openIgPostFlow(p.id, r.id);
-            Ads.toast('Instagram token problem: ' + ((v && v.error) || 'check Brand Kit'), true);
+            Ads.toast('Instagram token problem: ' + ((v && v.error) || 'see Performance → Instagram'), true);
             igSetupModal(p, r);
           });
         }
@@ -1185,7 +1248,7 @@ window.Ads = window.Ads || {};
             '<li>In the Instagram app: switch the account to a <strong>professional account</strong> (Settings → Account type)</li>' +
             '<li>At <strong>developers.facebook.com</strong> (free developer login): create an app → add the <strong>Instagram</strong> product → “API setup with Instagram business login”</li>' +
             '<li>Log in there with the Instagram account and approve <strong>instagram_business_basic</strong>, <strong>instagram_business_content_publish</strong>, <strong>instagram_business_manage_insights</strong></li>' +
-            '<li>Copy the access token it shows and paste it in <strong>Brand Kit → Instagram — direct posting</strong> — this button then publishes for real</li>' +
+            '<li>Copy the access token it shows and paste it in <strong>Performance → Instagram</strong> — this button then publishes for real</li>' +
           '</ol>' +
           '<p class="u-muted">Budget note: this path publishes the posts; putting money behind one is a manual <strong>Boost</strong> tap in the Instagram app. Fully automatic paid campaigns (spend + CPC syncing back here) are a later upgrade — that’s the only part that needs Meta Business Manager and a (never-used) Facebook Page.</p>' +
           '<p class="u-muted">Until then, post manually: each ad’s platform links are one click away below.</p>' +
@@ -1277,6 +1340,14 @@ window.Ads = window.Ads || {};
         var pending = items.filter(function (it) { return !((rNow && rNow.igPosts || {})[it.key]); });
         if (!pending.length) { Ads.toast('Everything in this round is already posted'); return Ads.closeModal(); }
         var goBtn = m.querySelector('[data-mact="go"]');
+        // explicit two-press confirm: nothing publishes on the first click
+        if (!m.__igArmed) {
+          m.__igArmed = true;
+          if (goBtn) goBtn.textContent = '⚠ About to post ' + pending.length + ' ad' + (pending.length === 1 ? '' : 's') + ' to Instagram — press again to confirm';
+          var stEl = m.querySelector('#igpost-status');
+          if (stEl) stEl.textContent = 'Nothing has been posted yet. Press the button again to publish for real, or Cancel.';
+          return;
+        }
         if (goBtn) { goBtn.disabled = true; goBtn.innerHTML = '<span class="spinner"></span> Posting…'; }
         var status = m.querySelector('#igpost-status');
         var done = 0, failed = 0, i = 0;
