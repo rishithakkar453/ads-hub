@@ -356,6 +356,23 @@ window.Ads = window.Ads || {};
       });
     });
   }
+  // resolve an interest keyword against Meta's detailed-targeting catalog
+  function madsInterests(q) {
+    return fetch('/api/mads/interests?q=' + encodeURIComponent(q), { headers: { 'X-Ads-Hub': '1' } })
+      .then(function (r) { return r.json().then(function (b) { if (!r.ok) throw new Error(b && b.message || 'Interest search failed'); return b.results || []; }); });
+  }
+  // AI-picked precise targeting from the project's audience research + the ads
+  function darkTarget(opts) {
+    return fetch('/api/ai/darktarget', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ads-Hub': '1' }, body: JSON.stringify(opts)
+    }).then(function (r) {
+      return r.json().then(function (b) {
+        if (r.status === 501) { var e = new Error(b && b.message || 'AI is off'); e.noKey = true; throw e; }
+        if (!r.ok) throw new Error(b && b.message || 'Targeting failed (' + r.status + ')');
+        return b;
+      });
+    });
+  }
   function madsInsights(ids) {
     return fetch('/api/mads/insights', {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ads-Hub': '1' }, body: JSON.stringify({ ids: ids })
@@ -372,5 +389,5 @@ window.Ads = window.Ads || {};
     });
   }
 
-  Ads.ai = { status: status, setKey: setKey, generateCopy: generateCopy, generateDossier: generateDossier, research: research, audience: audience, landingContent: landingContent, imageConcepts: imageConcepts, genImage: genImage, genImages: genImages, genClip: genClip, geminiStatus: geminiStatus, setGeminiKey: setGeminiKey, geminiVerify: geminiVerify, metaStatus: metaStatus, setMetaKey: setMetaKey, metaVerify: metaVerify, metaStage: metaStage, metaPost: metaPost, metaInsights: metaInsights, madsStatus: madsStatus, setMadsKey: setMadsKey, madsVerify: madsVerify, madsConfig: madsConfig, madsDark: madsDark, madsInsights: madsInsights, mediaPlan: mediaPlan, variationToSpec: variationToSpec, scrape: scrape, editSpec: editSpec };
+  Ads.ai = { status: status, setKey: setKey, generateCopy: generateCopy, generateDossier: generateDossier, research: research, audience: audience, landingContent: landingContent, imageConcepts: imageConcepts, genImage: genImage, genImages: genImages, genClip: genClip, geminiStatus: geminiStatus, setGeminiKey: setGeminiKey, geminiVerify: geminiVerify, metaStatus: metaStatus, setMetaKey: setMetaKey, metaVerify: metaVerify, metaStage: metaStage, metaPost: metaPost, metaInsights: metaInsights, madsStatus: madsStatus, setMadsKey: setMadsKey, madsVerify: madsVerify, madsConfig: madsConfig, madsDark: madsDark, madsInsights: madsInsights, madsInterests: madsInterests, darkTarget: darkTarget, mediaPlan: mediaPlan, variationToSpec: variationToSpec, scrape: scrape, editSpec: editSpec };
 })();

@@ -1463,11 +1463,21 @@ window.Ads = window.Ads || {};
           ' — none of it appears on the profile, and nothing spends until you activate the ads in Ads Manager.</p>' +
         (r.dark && r.dark.campaignId ? '<div class="hint" style="margin-bottom:1rem">⚠ This round already has a dark campaign — running again creates a NEW one (the old one stays in Ads Manager).</div>' : '') +
         '<div class="pp-quick">' +
-          '<div class="field" style="max-width:14rem;margin:0"><label>Daily budget (' + esc(conf.currency || 'USD') + ')</label><input class="input" id="dk-budget" inputmode="decimal" placeholder="20" value="' + esc(priorIn.budget && +priorIn.budget <= 100 ? priorIn.budget : '') + '"></div>' +
-          '<div class="field" style="max-width:16rem;margin:0"><label>Countries</label><input class="input" id="dk-countries" value="CA, US" placeholder="CA, US"></div>' +
-          '<div class="field" style="max-width:9rem;margin:0"><label>Age min</label><input class="input" id="dk-agemin" inputmode="numeric" value="25"></div>' +
-          '<div class="field" style="max-width:9rem;margin:0"><label>Age max</label><input class="input" id="dk-agemax" inputmode="numeric" value="65"></div>' +
+          '<div class="field" style="max-width:17rem;margin:0"><label>Daily budget (' + esc(conf.currency || 'USD') + ') — whole round</label><input class="input" id="dk-budget" inputmode="decimal" placeholder="20" value="' + esc(priorIn.budget && +priorIn.budget <= 100 ? priorIn.budget : '') + '"></div>' +
+          '<div class="field" style="max-width:16rem;margin:0"><label>Countries</label><input class="input" id="dk-countries" value="CA, US" placeholder="CA, US, GB…"></div>' +
+          '<div class="field" style="max-width:8rem;margin:0"><label>Age min</label><input class="input" id="dk-agemin" inputmode="numeric" value="25"></div>' +
+          '<div class="field" style="max-width:8rem;margin:0"><label>Age max</label><input class="input" id="dk-agemax" inputmode="numeric" value="65"></div>' +
+          '<div class="field" style="max-width:11rem;margin:0"><label>Gender</label><select class="select" id="dk-gender"><option value="all">Everyone</option><option value="women">Women</option><option value="men">Men</option></select></div>' +
           '<label class="pp-chip" style="align-self:flex-end"><input type="checkbox" id="dk-fb"><span>also Facebook feed</span></label>' +
+        '</div>' +
+        '<p class="u-faint" style="margin:0.4rem 0 1rem;font-size:1.12rem">One shared daily budget for the round — Meta automatically shifts it toward the ads that perform best.</p>' +
+        '<div class="field"><label>Detailed targeting — interests (from Meta’s catalog)</label>' +
+          '<div class="dk-chips" id="dk-ints"><span class="u-faint" style="font-size:1.12rem">none yet — add below or press Optimize</span></div>' +
+          '<div style="display:flex;gap:0.8rem;margin-top:0.6rem">' +
+            '<input class="input" id="dk-int-add" placeholder="type an interest and press Enter (e.g. Genealogy)" style="max-width:34rem">' +
+            '<button class="btn is-primary is-sm" id="dk-opt">✨ Optimize targeting for this round</button>' +
+          '</div>' +
+          '<div class="hint" id="dk-why" style="margin-top:0.6rem"></div>' +
         '</div>' +
         '<div class="igpost-list">' + rows + '</div>' +
         '<div class="gh-status" id="dk-status"></div>',
@@ -1482,12 +1492,76 @@ window.Ads = window.Ads || {};
         });
         // editing budget/targeting invalidates an armed confirm — the number
         // you confirm must be the number that runs
-        ['dk-budget', 'dk-countries', 'dk-agemin', 'dk-agemax', 'dk-fb'].forEach(function (id) {
+        function disarm() {
+          m.__dkArmed = false;
+          var g = m.querySelector('[data-mact="go"]');
+          if (g && !g.disabled) g.textContent = 'Create ' + items.length + ' dark ad' + (items.length === 1 ? '' : 's') + ' (paused)';
+        }
+        ['dk-budget', 'dk-countries', 'dk-agemin', 'dk-agemax', 'dk-fb', 'dk-gender'].forEach(function (id) {
           var n = m.querySelector('#' + id); if (!n) return;
-          n.addEventListener(id === 'dk-fb' ? 'change' : 'input', function () {
-            m.__dkArmed = false;
-            var g = m.querySelector('[data-mact="go"]');
-            if (g && !g.disabled) g.textContent = 'Create ' + items.length + ' dark ad' + (items.length === 1 ? '' : 's') + ' (paused)';
+          n.addEventListener(id === 'dk-fb' || id === 'dk-gender' ? 'change' : 'input', disarm);
+        });
+        // ---- interest chips + AI optimize ----
+        m.__ints = [];
+        var intBox = m.querySelector('#dk-ints');
+        function renderInts() {
+          if (!m.__ints.length) { intBox.innerHTML = '<span class="u-faint" style="font-size:1.12rem">none yet — add below or press Optimize</span>'; return; }
+          intBox.innerHTML = m.__ints.map(function (x, i) {
+            return '<span class="dk-chip">' + esc(x.name) + (x.size ? ' <em>' + (x.size > 1e6 ? Math.round(x.size / 1e6) + 'M' : Math.round(x.size / 1e3) + 'K') + '</em>' : '') +
+              '<button data-dki="' + i + '" title="remove">×</button></span>';
+          }).join('');
+          intBox.querySelectorAll('[data-dki]').forEach(function (b) {
+            b.addEventListener('click', function () { m.__ints.splice(+b.getAttribute('data-dki'), 1); renderInts(); disarm(); });
+          });
+        }
+        function addInterest(q, silent) {
+          return ai().madsInterests(q).then(function (results) {
+            var top = results[0];
+            if (!top) { if (!silent) Ads.toast('Meta has no interest matching “' + q + '”', true); return; }
+            if (m.__ints.some(function (x) { return x.id === top.id; })) return;
+            m.__ints.push(top); renderInts(); disarm();
+          }).catch(function (e) { if (!silent) Ads.toast(e.message, true); });
+        }
+        var intAdd = m.querySelector('#dk-int-add');
+        intAdd.addEventListener('keydown', function (e) {
+          if (e.key !== 'Enter') return;
+          e.preventDefault();
+          var q = intAdd.value.trim(); if (!q) return;
+          intAdd.value = '';
+          addInterest(q, false);
+        });
+        m.querySelector('#dk-opt').addEventListener('click', function () {
+          var why = m.querySelector('#dk-why');
+          var optBtn = m.querySelector('#dk-opt');
+          optBtn.disabled = true; optBtn.innerHTML = '<span class="spinner"></span> Reading the audience research…';
+          var pNow = store.getProject(pid);
+          var ctx = '== AUDIENCE RESEARCH (primary source — aim at its PRIMARY segment) ==\n' +
+            (pNow && pNow.audience && pNow.audience.data ? JSON.stringify(pNow.audience.data).slice(0, 9000) : 'No audience analysis — infer from the ads and dossier.') +
+            '\n\n== WHAT THE BUSINESS IS ==\n' + ((pNow && pNow.dossier && pNow.dossier.text) || '').slice(0, 2500) +
+            '\n\n== THE ADS IN THIS ROUND ==\n' + items.map(function (it) {
+              return '- ' + (it.spec.angle || it.spec.name || it.key) + ' | ' + (((it.spec.headlineStart || '') + ' ' + (it.spec.headlineHighlight || '')).trim());
+            }).join('\n');
+          ai().darkTarget({ context: ctx }).then(function (t) {
+            if (t.countries && t.countries.length) m.querySelector('#dk-countries').value = t.countries.join(', ');
+            if (t.ageMin) m.querySelector('#dk-agemin').value = t.ageMin;
+            if (t.ageMax) m.querySelector('#dk-agemax').value = t.ageMax;
+            m.querySelector('#dk-gender').value = t.gender || 'all';
+            disarm();
+            if (why) why.textContent = t.why || '';
+            // resolve the suggested interests against Meta's catalog, in order
+            var qi = 0, kws = t.interests || [];
+            optBtn.innerHTML = '<span class="spinner"></span> Matching interests on Meta…';
+            (function nextKw() {
+              if (qi >= kws.length) {
+                optBtn.disabled = false; optBtn.textContent = '✨ Optimize targeting for this round';
+                if (why) why.textContent = (t.why || '') + (m.__ints.length ? ' — ' + m.__ints.length + ' interests matched in Meta’s catalog.' : ' — no interests matched; add some manually.');
+                return;
+              }
+              addInterest(kws[qi++], true).then(nextKw);
+            })();
+          }).catch(function (e) {
+            optBtn.disabled = false; optBtn.textContent = '✨ Optimize targeting for this round';
+            Ads.toast(e.noKey ? 'Turn on AI (top-right) to use Optimize' : e.message, true);
           });
         });
       },
@@ -1542,10 +1616,13 @@ window.Ads = window.Ads || {};
             return;
           }
           if (status) status.innerHTML = '<span class="spinner"></span> Creating the paused campaign on Meta…';
+          var genderSel = m.querySelector('#dk-gender').value;
           ai().madsDark({
             roundId: rid, roundName: r.name, budget: budget, countries: countries,
             ageMin: m.querySelector('#dk-agemin').value, ageMax: m.querySelector('#dk-agemax').value,
             includeFb: m.querySelector('#dk-fb').checked,
+            genders: genderSel === 'women' ? [2] : genderSel === 'men' ? [1] : [],
+            interests: m.__ints || [],
             ads: payloadAds,
             idem: 'dark:' + rid + ':' + (r.dark && r.dark.campaignId ? r.dark.campaignId : 'first')
           }, function (note) { if (status) status.innerHTML = '<span class="spinner"></span> ' + esc(note); })

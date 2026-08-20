@@ -1336,6 +1336,12 @@ function madsDarkRun(jobId, input) {
       instagram_positions: ['stream', 'story', 'reels']
     };
     if (input.includeFb) targeting.facebook_positions = ['feed'];
+    // precision aim: gender + detailed-targeting interests resolved against
+    // Meta's catalog client-side ({id,name} pairs from /api/mads/interests)
+    if (Array.isArray(input.genders) && input.genders.length) targeting.genders = input.genders.map(function (g) { return parseInt(g, 10); }).filter(Boolean);
+    var ints = (Array.isArray(input.interests) ? input.interests : []).filter(function (x) { return x && x.id && x.name; })
+      .map(function (x) { return { id: String(x.id), name: String(x.name).slice(0, 80) }; }).slice(0, 25);
+    if (ints.length) targeting.interests = ints;
     function runAds() {
       var i = 0;
       (function nextAd() {
@@ -2698,6 +2704,50 @@ var server = http.createServer(function (req, res) {
   }
 
   // --- AI media plan (budget + platforms + ads + audience → executable plan) ---
+  // --- AI dark-ads targeting: read the project's audience analysis + the
+  // round's ads → concrete Meta targeting (countries, ages, gender, interests)
+  if (pathname === '/api/ai/darktarget' && req.method === 'POST') {
+    if (!effectiveKey()) return sendJSON(res, 501, { error: 'no_key', message: 'Turn on AI to use Optimize targeting.' });
+    return readBody(req, function (raw, overSize) {
+      if (raw == null) return sendJSON(res, 413, { error: 'too_large' });
+      var input; try { input = raw ? JSON.parse(raw) : {}; } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
+      if (!String(input.context || '').trim()) return sendJSON(res, 400, { error: 'no_context' });
+      callAnthropic({
+        model: MODEL, max_tokens: 1500,
+        system: 'You are a senior Meta ads media buyer. From the advertiser\'s audience research and the actual ads below, produce the most PRECISELY AIMED Meta ad-set targeting possible. Respond with ONLY strict JSON, no prose: {"countries":["ISO-3166 alpha-2",...],"ageMin":18-65,"ageMax":18-65,"gender":"all"|"women"|"men","interests":["6-12 Meta detailed-targeting interest names — real things people follow (e.g. Genealogy, Family reunion, Cloud storage), most-specific first"],"why":"2-3 sentences explaining the aim"}. Ground every choice in the research; when the research names segments, target the PRIMARY segment tightly rather than everyone loosely.',
+        messages: [{ role: 'user', content: String(input.context).slice(0, 30000) }]
+      }, function (err, status, body) {
+        if (err) return sendJSON(res, 502, { error: 'upstream', message: String(err.message || err) });
+        if (status < 200 || status >= 300) { var msg = body; try { msg = JSON.parse(body).error.message; } catch (e) {} return sendJSON(res, status, { error: 'api', message: msg }); }
+        try {
+          var j = JSON.parse(body);
+          var txt = (j.content || []).map(function (c) { return c.text || ''; }).join('');
+          var m2 = /\{[\s\S]*\}/.exec(txt);
+          if (!m2) throw new Error('no JSON in the reply');
+          var t = JSON.parse(m2[0]);
+          sendJSON(res, 200, {
+            countries: (t.countries || []).map(function (c) { return String(c).toUpperCase(); }).filter(function (c) { return /^[A-Z]{2}$/.test(c); }),
+            ageMin: parseInt(t.ageMin, 10) || 18, ageMax: parseInt(t.ageMax, 10) || 65,
+            gender: /^(women|men)$/.test(t.gender) ? t.gender : 'all',
+            interests: (t.interests || []).map(String).slice(0, 12),
+            why: String(t.why || '').slice(0, 600)
+          });
+        } catch (e2) { sendJSON(res, 500, { error: 'parse', message: 'Could not parse the targeting: ' + e2.message }); }
+      }, 120000);
+    }, 512 * 1024);
+  }
+  // resolve an interest keyword against Meta's real detailed-targeting catalog
+  if (pathname === '/api/mads/interests' && req.method === 'GET') {
+    if (!requireAppHeader(req, res)) return;
+    if (!effectiveMadsToken()) return sendJSON(res, 501, { error: 'no_mads_token' });
+    var iq = String(parsed.query.q || '').slice(0, 80);
+    if (!iq.trim()) return sendJSON(res, 400, { error: 'bad_args' });
+    return fbRequest('GET', '/search', { type: 'adinterest', q: iq, limit: 5, access_token: effectiveMadsToken() }, function (err, j) {
+      if (err) return sendJSON(res, 502, { error: 'ig_search', message: err.message });
+      sendJSON(res, 200, { results: (j.data || []).map(function (r2) { return { id: String(r2.id), name: r2.name, size: r2.audience_size_lower_bound || r2.audience_size || null }; }) });
+    });
+  }
+
   if (pathname === '/api/ai/mediaplan' && req.method === 'POST') {
     if (!effectiveKey()) return sendJSON(res, 501, { error: 'no_key', message: 'Turn on AI (top-right toggle) and add a key, or set ANTHROPIC_API_KEY.' });
     return readBody(req, function (raw, overSize) {
