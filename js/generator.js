@@ -3151,14 +3151,29 @@ window.Ads = window.Ads || {};
   }
 
   /* ===================== lightbox ======================================== */
+  // the ad's published landing page (direct /p/ URL — NOT the /a/ click-logger,
+  // so opening it yourself never counts as an ad click in the stats)
+  function landingURLFor(spec) {
+    if (!spec.adKey) return '';
+    var url = '';
+    store.listProjects().forEach(function (pr) {
+      if (url) return;
+      (pr.landings || []).forEach(function (l) {
+        if (!url && l.tracked && l.publicPath && (l.adKeys || []).indexOf(spec.adKey) >= 0) url = trackBase() + l.publicPath;
+      });
+    });
+    return url;
+  }
   function openAdLightbox(s, idx, lbOpts) {
     lbOpts = lbOpts || {};
     var dom = briefLib.domain(gen.brief);
     var isVideo = s.kind === 'video';
+    var landingURL = landingURLFor(s);
     var typeRow = isVideo
       ? '<dt>Type</dt><dd>Motion video · 9:16 · ' + esc((s.motion || 'auto')) + '</dd>'
       : '<dt>Template</dt><dd>' + esc(T.tplById(s.template).label + ' · ' + (T.FORMATS[s.format] || {}).label) + '</dd>';
     var foot = [{ label: 'Edit ad', act: 'edit', ghost: true }, { label: 'Copy caption', act: 'cap', ghost: true }];
+    if (landingURL) foot.push({ label: 'Landing page', act: 'lp', ghost: true });
     if (isVideo) { foot.push({ label: 'Download video', act: 'dl', primary: true }); foot.push({ label: 'Frame', act: 'frame', ghost: true }); }
     else foot.push({ label: 'Download PNG', act: 'dl', primary: true });
     foot.push({ label: 'Close', act: 'close' });
@@ -3186,6 +3201,7 @@ window.Ads = window.Ads || {};
         else if (act === 'dl') render.downloadAuto(s).then(function (r) { Ads.toast((r && r.ext ? r.ext.toUpperCase() : '') + ' downloaded'); }).catch(function (e) { Ads.toast(e.message, true); });
         else if (act === 'frame') Ads.video.posterBlob(s).then(function (b) { util.downloadBlob(b, util.slug(s.name) + '-frame.png'); Ads.toast('Frame downloaded'); }).catch(function (e) { Ads.toast(e.message, true); });
         else if (act === 'cap') { try { navigator.clipboard.writeText(s.caption || ''); Ads.toast('Caption copied'); } catch (e) { Ads.toast('Could not copy', true); } }
+        else if (act === 'lp') { window.open(landingURL, '_blank', 'noopener'); }
         else if (act === 'edit') {
           if (lbCtrl) lbCtrl.stop();
           Ads.closeModal();
