@@ -852,7 +852,29 @@ window.Ads = window.Ads || {};
       '<span class="u-faint" style="margin-left:auto">' + (t.syncedAt ? 'synced ' + esc(String(t.syncedAt).slice(0, 16).replace('T', ' ')) : 'stats not synced yet') + '</span>' +
       '<button class="btn is-sm" id="rndf-new">+ New round</button>' +
     '</div></div>';
-    var sections = rounds.map(function (r) {
+    // one round at a time: a highlighted heading with a dropdown, rounds
+    // ordered by the number in their name (0.5 above 1, 1 above 2, …)
+    function roundNum(r) { var m = /([0-9]+(?:\.[0-9]+)?)/.exec(r.name || ''); return m ? parseFloat(m[1]) : Infinity; }
+    var sorted = rounds.slice().sort(function (a, b) {
+      var na = roundNum(a), nb = roundNum(b);
+      if (na !== nb) return na - nb;
+      return String(a.name).localeCompare(String(b.name));
+    });
+    var selR = sorted.filter(function (r) { return r.id === folderPlanRound; })[0] || sorted[sorted.length - 1] || null;
+    if (selR) folderPlanRound = selR.id;
+    if (selR) {
+      head += '<div class="view-section"><div class="rndf-pick">' +
+        '<button class="rndf-current" id="rndf-pick">' + esc(selR.name) + ' <span class="rndf-caret">▾</span></button>' +
+        '<span class="u-label">' + selR.adKeys.length + ' ads in this round</span>' +
+        '<div class="rndf-menu" id="rndf-menu" hidden>' +
+          sorted.map(function (r) {
+            return '<button class="rndf-mi' + (r.id === selR.id ? ' is-active' : '') + '" data-rsel="' + esc(r.id) + '">' +
+              esc(r.name) + '<span>' + r.adKeys.length + ' ads</span></button>';
+          }).join('') +
+        '</div>' +
+      '</div></div>';
+    }
+    var sections = (selR ? [selR] : []).map(function (r) {
       var tot = { clicks: 0, views: 0, outs: 0, spend: 0, spendSet: false };
       var cards = r.adKeys.map(function (k) {
         var a = byKey[k]; var st = snap[k] || {};
@@ -904,7 +926,16 @@ window.Ads = window.Ads || {};
         '<div class="rndp-grid">' + cards + '</div></div>';
     }).join('');
     el.innerHTML = head + (sections || '<div class="view-section"><div class="dos-state is-empty">No rounds yet — press “+ New round” and pick the ads you’re posting.</div></div>') +
-      planSectionHTML(p, rounds);
+      planSectionHTML(p, selR ? [selR] : []);
+    // round dropdown: open on the heading, pick → page re-renders scoped to it
+    var pickBtn = el.querySelector('#rndf-pick'), pickMenu = el.querySelector('#rndf-menu');
+    if (pickBtn) {
+      pickBtn.addEventListener('click', function (e) { e.stopPropagation(); pickMenu.hidden = !pickMenu.hidden; });
+      el.addEventListener('click', function () { if (pickMenu && !pickMenu.hidden) pickMenu.hidden = true; });
+      el.querySelectorAll('[data-rsel]').forEach(function (b) {
+        b.addEventListener('click', function () { folderPlanRound = b.getAttribute('data-rsel'); Ads.go('rounds'); });
+      });
+    }
     // thumbs — video ads play their clip on hover, same as the saved shelf
     el.querySelectorAll('[data-rt2]').forEach(function (n) {
       var a = byKey[n.getAttribute('data-rt2')]; if (!a) return;
@@ -1005,7 +1036,7 @@ window.Ads = window.Ads || {};
         Ads.go('rounds');   // refresh cost-per metrics + round totals
       });
     });
-    bindPlanSection(el, p, rounds);
+    bindPlanSection(el, p, selR ? [selR] : []);
   }
 
   // One ZIP per round: every ad's creative (PNG / real MP4) plus a .txt twin
