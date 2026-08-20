@@ -1228,7 +1228,9 @@ function fbRequest(method, apiPath, params, cb, timeoutMs) {
       var msg = 'Meta ' + resp.statusCode;
       if (j && j.error) msg += ': ' + (j.error.error_user_msg || j.error.message || JSON.stringify(j.error).slice(0, 250));
       else if (txt) msg += ': ' + txt.slice(0, 250);
-      done(new Error(msg));
+      var em = new Error(msg);
+      if (j && j.error) em.fb = j.error;   // full structured error — handlers can self-heal (e.g. deprecated interests)
+      done(em);
     });
   });
   rq.on('error', function (e) { done(new Error('Meta request failed: ' + e.message)); });
@@ -1429,20 +1431,43 @@ function madsDarkRun(jobId, input) {
       note('resuming the failed attempt — reusing its paused campaign and ad set…');
       return runAds();
     }
-    note('creating ad set…');
-    fbRequest('POST', act + '/adsets', {
-      name: 'Ads Hub — ' + (input.roundName || 'round'),
-      campaign_id: out.campaignId,
-      daily_budget: daily,
-      billing_event: 'IMPRESSIONS', optimization_goal: 'LINK_CLICKS',
-      bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
-      targeting: targeting, status: 'PAUSED', access_token: tok
-    }, function (serr, sj) {
-      if (serr) return fail(serr);
-      out.adsetId = sj.id;
-      ledger('running');
-      runAds();
-    });
+    // Meta retires interest ids constantly (their own search can return ones
+    // already deprecated) — when the ad set is rejected for that, strip the
+    // named ids and retry instead of surfacing an unfixable error.
+    function createAdset(tg, attempt) {
+      note(attempt ? 'creating ad set (retry without deprecated interests)…' : 'creating ad set…');
+      fbRequest('POST', act + '/adsets', {
+        name: 'Ads Hub — ' + (input.roundName || 'round'),
+        campaign_id: out.campaignId,
+        daily_budget: daily,
+        billing_event: 'IMPRESSIONS', optimization_goal: 'LINK_CLICKS',
+        bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
+        targeting: tg, status: 'PAUSED', access_token: tok
+      }, function (serr, sj) {
+        if (serr) {
+          var raw = JSON.stringify(serr.fb || {}) + ' ' + serr.message;
+          if (attempt < 2 && tg.interests && tg.interests.length && /deprecated/i.test(raw)) {
+            var dep = [];
+            raw.replace(/deprecated_interest_id[^0-9]*([0-9]{5,})/g, function (mm, id) { dep.push(id); return mm; });
+            var kept = dep.length
+              ? tg.interests.filter(function (x) { return dep.indexOf(String(x.id)) < 0; })
+              : [];   // unparseable deprecation error → drop all interests rather than stay stuck
+            if (kept.length < tg.interests.length) {
+              var dropped = tg.interests.length - kept.length;
+              note('Meta retired ' + dropped + ' interest' + (dropped === 1 ? '' : 's') + ' — retrying without ' + (kept.length ? 'them' : 'interest targeting') + '…');
+              var tg2 = {}; Object.keys(tg).forEach(function (k2) { tg2[k2] = tg[k2]; });
+              if (kept.length) tg2.interests = kept; else delete tg2.interests;
+              return createAdset(tg2, attempt + 1);
+            }
+          }
+          return fail(serr);
+        }
+        out.adsetId = sj.id;
+        ledger('running');
+        runAds();
+      });
+    }
+    createAdset(targeting, 0);
   });
 }
 
