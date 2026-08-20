@@ -1319,7 +1319,11 @@ function madsDarkRun(jobId, input) {
     note('creating campaign…');
     fbRequest('POST', act + '/campaigns', {
       name: 'Ads Hub — ' + (input.roundName || 'round') + ' — ' + new Date().toISOString().slice(0, 10),
-      objective: 'OUTCOME_TRAFFIC', special_ad_categories: [], status: 'PAUSED', access_token: tok
+      objective: 'OUTCOME_TRAFFIC', special_ad_categories: [], status: 'PAUSED',
+      // required (v24+) whenever the budget lives on the ad set instead of the
+      // campaign; false = the round's ad set keeps its budget strictly to itself
+      is_adset_budget_sharing_enabled: false,
+      access_token: tok
     }, function (cerr, cj) {
       if (cerr) return fail(cerr);
       out.campaignId = cj.id;
@@ -1432,9 +1436,6 @@ function madsDarkRun(jobId, input) {
       daily_budget: daily,
       billing_event: 'IMPRESSIONS', optimization_goal: 'LINK_CLICKS',
       bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
-      // required when the budget lives on the ad set (not the campaign);
-      // false = this ad set's budget is strictly its own
-      is_adset_budget_sharing_enabled: false,
       targeting: targeting, status: 'PAUSED', access_token: tok
     }, function (serr, sj) {
       if (serr) return fail(serr);
