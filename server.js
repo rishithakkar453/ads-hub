@@ -1432,6 +1432,9 @@ function madsDarkRun(jobId, input) {
       daily_budget: daily,
       billing_event: 'IMPRESSIONS', optimization_goal: 'LINK_CLICKS',
       bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
+      // required when the budget lives on the ad set (not the campaign);
+      // false = this ad set's budget is strictly its own
+      is_adset_budget_sharing_enabled: false,
       targeting: targeting, status: 'PAUSED', access_token: tok
     }, function (serr, sj) {
       if (serr) return fail(serr);
