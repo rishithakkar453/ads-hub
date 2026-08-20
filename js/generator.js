@@ -1385,7 +1385,7 @@ window.Ads = window.Ads || {};
   var TYPE_MOTIONS = ['lines', 'words', 'punch', 'sweep'];   // headline reveal
   var BG_MOVES = ['drift', 'pushIn', 'pushOut', 'panL', 'panR']; // camera move
   var GRADES = ['none', 'duotone', 'warm', 'noir', 'vivid'];  // colour grade
-  var ACCENT_SETS = [[], ['progress'], ['underline'], ['ticks'], ['progress', 'underline']];
+  var ACCENT_SETS = [[], ['underline'], ['ticks']];   // 'progress' bar retired — never generate it
   function hashStr(s) { var h = 2166136261; for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
   // pick a coherent-but-unique DNA per video ad; `seen` de-dups the batch,
   // `scores` biases toward liked / away from disliked treatments.

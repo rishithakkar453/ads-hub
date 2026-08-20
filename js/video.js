@@ -424,11 +424,9 @@ window.Ads = window.Ads || {};
     // ---- motion-graphic accents (DNA furniture in the secondary colour) ----
     var accs = dna.accents || [];
     for (var ai = 0; ai < accs.length; ai++) {
-      if (accs[ai] === 'progress') {                        // watch-time bar along the base
-        var barH = Math.max(3, Math.round(H * 0.006));
-        ctx.save(); ctx.globalAlpha = 0.92; ctx.fillStyle = secondary;
-        ctx.fillRect(0, H - barH, W * clamp(t / dur, 0, 1), barH); ctx.restore();
-      } else if (accs[ai] === 'underline' && hlBottomForUnderline != null) { // keyline under headline
+      // 'progress' (a watch-time bar along the base) is retired by request —
+      // old saved specs may still carry it in their DNA; it never draws.
+      if (accs[ai] === 'underline' && hlBottomForUnderline != null) { // keyline under headline
         var uw = hlWidthForUnderline * eo(clamp((t - 1.0) / 0.5, 0, 1));
         var uh = Math.max(4, Math.round(hlFs * 0.07));
         ctx.save(); ctx.globalAlpha = 0.95; ctx.fillStyle = secondary;
