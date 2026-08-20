@@ -842,10 +842,20 @@ window.Ads = window.Ads || {};
     }).join('');
     el.innerHTML = head + (sections || '<div class="view-section"><div class="dos-state is-empty">No rounds yet — press “+ New round” and pick the ads you’re posting.</div></div>') +
       planSectionHTML(p, rounds);
-    // thumbs
+    // thumbs — video ads play their clip on hover, same as the saved shelf
     el.querySelectorAll('[data-rt2]').forEach(function (n) {
       var a = byKey[n.getAttribute('data-rt2')]; if (!a) return;
       try { thumbFor(n, a, n.clientWidth || 150, null); } catch (e) {}
+      if (a.kind === 'video' && Ads.video) {
+        var card = n.closest('.rndp-card') || n;
+        card.addEventListener('mouseenter', function () {
+          if (n._vc) return;
+          try { n._vc = Ads.video.mount(n, a, true); } catch (e) {}
+        });
+        card.addEventListener('mouseleave', function () {
+          if (n._vc) { try { n._vc.poster(); } catch (e) {} n._vc = null; }
+        });
+      }
     });
     // bindings
     el.querySelector('#rndf-back').addEventListener('click', function () { roundsOpenProject = null; Ads.go('rounds'); });
@@ -905,7 +915,7 @@ window.Ads = window.Ads || {};
       var tEl = card.querySelector('[data-rt2]');
       var a = tEl && byKey[tEl.getAttribute('data-rt2')];
       if (!a) return;
-      card.title = 'Double-click to open the full ad';
+      card.title = a.kind === 'video' ? 'Hover plays the clip · double-click opens the full ad' : 'Double-click to open the full ad';
       card.addEventListener('dblclick', function (e) {
         if (e.target.closest('input, a, button, textarea')) return;   // spend box, IG links
         // onSaved: re-render this page so the card immediately shows the edit
