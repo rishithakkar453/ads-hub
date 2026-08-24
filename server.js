@@ -116,7 +116,7 @@ var madsLastError = '';
 var madsConf = null;   // { adAccountId, adAccountName, currency, pageId, pageName, igUserId, igUsername, accounts[], pages[] }
 try { madsConf = JSON.parse(fs.readFileSync(MADS_CONF_FILE, 'utf8')); } catch (e) {}
 function saveMadsConf() {
-  try { fs.mkdirSync(path.dirname(MADS_CONF_FILE), { recursive: true }); fs.writeFileSync(MADS_CONF_FILE, JSON.stringify(madsConf)); } catch (e) {}
+  try { fs.mkdirSync(path.dirname(MADS_CONF_FILE), { recursive: true }); fs.writeFileSync(MADS_CONF_FILE, JSON.stringify(madsConf), { mode: 0o666 }); } catch (e) {}
 }
 var FB_GRAPH_HOST = 'graph.facebook.com';
 // Durable ledger of every dark-ads run, keyed by round id. In-memory jobs die
@@ -126,7 +126,7 @@ var MADS_RUNS_FILE = path.join(__dirname, 'data', 'mads-runs.json');
 var madsRuns = {};
 try { madsRuns = JSON.parse(fs.readFileSync(MADS_RUNS_FILE, 'utf8')) || {}; } catch (e) {}
 function saveMadsRuns() {
-  try { fs.mkdirSync(path.dirname(MADS_RUNS_FILE), { recursive: true }); fs.writeFileSync(MADS_RUNS_FILE, JSON.stringify(madsRuns)); } catch (e) {}
+  try { fs.mkdirSync(path.dirname(MADS_RUNS_FILE), { recursive: true }); fs.writeFileSync(MADS_RUNS_FILE, JSON.stringify(madsRuns), { mode: 0o666 }); } catch (e) {}
 }
 // Meta budgets are in the account currency's MINOR unit — offset 100 for
 // USD/CAD/EUR etc, but 1 for zero-decimal currencies. Hardcoding ×100 would
@@ -1145,7 +1145,7 @@ function igRefresh() {
     }
     igRuntimeToken = j.access_token;
     fs.mkdir(path.dirname(IG_TOKEN_FILE), { recursive: true }, function () {
-      fs.writeFile(IG_TOKEN_FILE, j.access_token, function (werr) {
+      fs.writeFile(IG_TOKEN_FILE, j.access_token, { mode: 0o666 }, function (werr) {
         igTokenPersisted = !werr;
         console.log('[ads-hub] IG token refreshed (expires in ' + Math.round((j.expires_in || 0) / 86400) + 'd)');
       });
@@ -1371,7 +1371,9 @@ function madsDarkRun(jobId, input) {
       age_min: Math.max(18, parseInt(input.ageMin, 10) || 18),
       age_max: Math.min(65, parseInt(input.ageMax, 10) || 65),
       publisher_platforms: input.includeFb ? ['instagram', 'facebook'] : ['instagram'],
-      instagram_positions: ['stream', 'story', 'reels']
+      // everywhere on Instagram (ig_search excluded — Meta couples it to
+      // Facebook placements, impossible in an Instagram-only set)
+      instagram_positions: ['stream', 'story', 'reels', 'explore_home', 'profile_feed', 'profile_reels']
     };
     if (input.includeFb) targeting.facebook_positions = ['feed'];
     // required flag: explicitly DISABLE Advantage+ audience expansion — the
@@ -1483,6 +1485,19 @@ function madsDarkRun(jobId, input) {
       }, function (serr, sj) {
         if (serr) {
           var raw = JSON.stringify(serr.fb || {}) + ' ' + serr.message;
+          // placement-combo rejections: strip any position Meta names, else
+          // fall back to the always-valid feed/story/reels trio
+          if (attempt < 3 && /placement|position/i.test(raw)) {
+            var posNow = tg.instagram_positions || [];
+            var badPos = posNow.filter(function (p2) { return raw.indexOf(p2) >= 0; });
+            var keptPos = badPos.length ? posNow.filter(function (p2) { return badPos.indexOf(p2) < 0; }) : ['stream', 'story', 'reels'];
+            if (keptPos.length && keptPos.join(',') !== posNow.join(',')) {
+              note('Meta rejected the placement combo — retrying with ' + keptPos.length + ' Instagram placements…');
+              var tgP = {}; Object.keys(tg).forEach(function (k3) { tgP[k3] = tg[k3]; });
+              tgP.instagram_positions = keptPos;
+              return createAdset(tgP, attempt + 1);
+            }
+          }
           if (attempt < 2 && tg.interests && tg.interests.length && /deprecated/i.test(raw)) {
             var dep = [];
             raw.replace(/deprecated_interest_id[^0-9]*([0-9]{5,})/g, function (mm, id) { dep.push(id); return mm; });
@@ -2356,7 +2371,7 @@ var server = http.createServer(function (req, res) {
       if (!k) { igTokenPersisted = false; igLastError = ''; igUser = null; return fs.unlink(IG_TOKEN_FILE, function () { sendJSON(res, 200, { enabled: false, source: 'none' }); }); }
       igLastError = '';
       return fs.mkdir(path.dirname(IG_TOKEN_FILE), { recursive: true }, function () {
-        fs.writeFile(IG_TOKEN_FILE, k, function (werr) {
+        fs.writeFile(IG_TOKEN_FILE, k, { mode: 0o666 }, function (werr) {
           igTokenPersisted = !werr;
           // verify immediately so the user learns right away if the token is bad
           igVerify(function (verr, u) {
@@ -2486,7 +2501,7 @@ var server = http.createServer(function (req, res) {
       if (!k) { madsTokenPersisted = false; madsLastError = ''; madsConf = null; fs.unlink(MADS_CONF_FILE, function () {}); return fs.unlink(MADS_TOKEN_FILE, function () { sendJSON(res, 200, { enabled: false, source: 'none' }); }); }
       madsLastError = '';
       return fs.mkdir(path.dirname(MADS_TOKEN_FILE), { recursive: true }, function () {
-        fs.writeFile(MADS_TOKEN_FILE, k, function (werr) {
+        fs.writeFile(MADS_TOKEN_FILE, k, { mode: 0o666 }, function (werr) {
           madsTokenPersisted = !werr;
           madsVerify(function (verr, conf) {
             sendJSON(res, 200, { enabled: true, source: madsTokenSource(), persisted: !werr, ok: !verr, error: verr ? verr.message : '', conf: conf || null });
