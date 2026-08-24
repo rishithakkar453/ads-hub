@@ -1319,8 +1319,13 @@ function madsDarkRun(jobId, input) {
   var act = '/' + madsConf.adAccountId;
   var ads = input.ads || [];
   // a failed earlier attempt may have left a usable paused campaign/adset —
-  // reuse them instead of manufacturing lookalike orphans
-  var reuse = (rid && madsRuns[rid] && madsRuns[rid].state === 'error' && madsRuns[rid].campaignId) ? madsRuns[rid] : null;
+  // reuse them instead of manufacturing lookalike orphans. "Failed" includes
+  // runs that finished but with per-ad errors (e.g. the dev-mode creative
+  // block): those RESUME too; only a fully-successful run means a new
+  // campaign on the next deliberate re-run.
+  var rec = rid ? madsRuns[rid] : null;
+  var recHasFailures = !!(rec && rec.ads && Object.keys(rec.ads).some(function (k) { return !(rec.ads[k] && rec.ads[k].adId); }));
+  var reuse = (rec && rec.campaignId && (rec.state === 'error' || recHasFailures)) ? rec : null;
   function withCampaign(cb2) {
     if (reuse && reuse.campaignId) { out.campaignId = reuse.campaignId; note('reusing the campaign from the failed attempt…'); return cb2(); }
     note('creating campaign…');
@@ -2508,9 +2513,12 @@ var server = http.createServer(function (req, res) {
       // returns the recorded campaign instead of building a lookalike twin.
       // Deliberate re-runs use a campaignId-suffixed idem and pass through.
       var ridReq = String(input.roundId);
-      if (/:first$/.test(idem) && madsRuns[ridReq] && madsRuns[ridReq].state === 'done' && madsRuns[ridReq].campaignId) {
+      var recR = madsRuns[ridReq];
+      var recClean = !!(recR && recR.state === 'done' && recR.campaignId && recR.ads &&
+        Object.keys(recR.ads).length && Object.keys(recR.ads).every(function (k) { return recR.ads[k] && recR.ads[k].adId; }));
+      if (/:first$/.test(idem) && recClean) {
         var healId = 'heal-' + Date.now().toString(36) + crypto.randomBytes(3).toString('hex');
-        igJobs[healId] = { state: 'done', at: Date.now(), result: { campaignId: madsRuns[ridReq].campaignId, adsetId: madsRuns[ridReq].adsetId, ads: madsRuns[ridReq].ads || {} } };
+        igJobs[healId] = { state: 'done', at: Date.now(), result: { campaignId: recR.campaignId, adsetId: recR.adsetId, ads: recR.ads || {} } };
         return sendJSON(res, 200, { ok: true, job: healId, state: 'done', recovered: true });
       }
       var jobId = idem || ('mads-' + Date.now().toString(36) + crypto.randomBytes(4).toString('hex'));
