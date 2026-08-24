@@ -1314,8 +1314,11 @@ function madsDarkRun(jobId, input) {
   if (!tok) return fail(new Error('no_mads_token'));
   if (!madsConf || !madsConf.adAccountId || !madsConf.pageId) return fail(new Error('Pick the ad account and Page first (Performance → Instagram → Dark ads).'));
   var mult = MADS_OFFSET_ONE[String(madsConf.currency || 'USD').toUpperCase()] ? 1 : 100;
-  var daily = Math.round((parseFloat(input.budget) || 0) * mult);
-  if (!(daily > 0)) return fail(new Error('bad budget'));
+  // TOTAL budget over a fixed window: lifetime_budget + end_time gives a hard
+  // spend cap and an automatic stop — no open-ended daily drip
+  var totalMinor = Math.round((parseFloat(input.budget) || 0) * mult);
+  var days = Math.min(90, Math.max(1, parseInt(input.days, 10) || 1));
+  if (!(totalMinor > 0)) return fail(new Error('bad budget'));
   var act = '/' + madsConf.adAccountId;
   var ads = input.ads || [];
   // a failed earlier attempt may have left a usable paused campaign/adset —
@@ -1471,7 +1474,9 @@ function madsDarkRun(jobId, input) {
       fbRequest('POST', act + '/adsets', {
         name: 'Ads Hub — ' + (input.roundName || 'round'),
         campaign_id: out.campaignId,
-        daily_budget: daily,
+        lifetime_budget: totalMinor,
+        start_time: new Date().toISOString(),
+        end_time: new Date(Date.now() + days * 86400 * 1000).toISOString(),
         billing_event: 'IMPRESSIONS', optimization_goal: 'LINK_CLICKS',
         bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
         targeting: tg, status: 'PAUSED', access_token: tok

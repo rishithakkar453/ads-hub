@@ -1452,6 +1452,7 @@ window.Ads = window.Ads || {};
     // once prefills every later visit
     var savedT = r.darkTargeting || null;
     var tBudget = (savedT && savedT.budget) || (priorIn.budget && +priorIn.budget <= 100 ? priorIn.budget : '');
+    var tDays = (savedT && savedT.days) || 7;
     var tCountries = (savedT && savedT.countries) || 'CA, US';
     var tAgeMin = (savedT && savedT.ageMin) || 25;
     var tAgeMax = (savedT && savedT.ageMax) || 65;
@@ -1469,6 +1470,7 @@ window.Ads = window.Ads || {};
     function persistTargeting(m, why) {
       updateRound(pid, rid, { darkTargeting: {
         budget: m.querySelector('#dk-budget').value.trim(),
+        days: m.querySelector('#dk-days').value.trim(),
         countries: m.querySelector('#dk-countries').value,
         ageMin: m.querySelector('#dk-agemin').value,
         ageMax: m.querySelector('#dk-agemax').value,
@@ -1486,7 +1488,8 @@ window.Ads = window.Ads || {};
           ' — none of it appears on the profile, and nothing spends until you activate the ads in Ads Manager.</p>' +
         (r.dark && r.dark.campaignId ? '<div class="hint" style="margin-bottom:1rem">⚠ This round already has a dark campaign — running again creates a NEW one (the old one stays in Ads Manager).</div>' : '') +
         '<div class="pp-quick">' +
-          '<div class="field" style="max-width:17rem;margin:0"><label>Daily budget (' + esc(conf.currency || 'USD') + ') — whole round</label><input class="input" id="dk-budget" inputmode="decimal" placeholder="20" value="' + esc(tBudget) + '"></div>' +
+          '<div class="field" style="max-width:15rem;margin:0"><label>TOTAL budget (' + esc(conf.currency || 'USD') + ')</label><input class="input" id="dk-budget" inputmode="decimal" placeholder="20" value="' + esc(tBudget) + '"></div>' +
+          '<div class="field" style="max-width:8rem;margin:0"><label>Days</label><input class="input" id="dk-days" inputmode="numeric" value="' + esc(tDays) + '"></div>' +
           '<div class="field" style="max-width:16rem;margin:0"><label>Countries</label><input class="input" id="dk-countries" value="' + esc(tCountries) + '" placeholder="CA, US, GB…"></div>' +
           '<div class="field" style="max-width:8rem;margin:0"><label>Age min</label><input class="input" id="dk-agemin" inputmode="numeric" value="' + esc(tAgeMin) + '"></div>' +
           '<div class="field" style="max-width:8rem;margin:0"><label>Age max</label><input class="input" id="dk-agemax" inputmode="numeric" value="' + esc(tAgeMax) + '"></div>' +
@@ -1495,7 +1498,7 @@ window.Ads = window.Ads || {};
           '</select></div>' +
           '<label class="pp-chip" style="align-self:flex-end"><input type="checkbox" id="dk-fb"' + (savedT && savedT.includeFb ? ' checked' : '') + '><span>also Facebook feed</span></label>' +
         '</div>' +
-        '<p class="u-faint" style="margin:0.4rem 0 1rem;font-size:1.12rem">One shared daily budget for the round — Meta automatically shifts it toward the ads that perform best.</p>' +
+        '<p class="u-faint" id="dk-explain" style="margin:0.4rem 0 1rem;font-size:1.18rem"></p>' +
         '<div class="field"><label>Detailed targeting — interests (from Meta’s catalog)</label>' +
           '<div class="dk-chips" id="dk-ints"><span class="u-faint" style="font-size:1.12rem">none yet — add below or press Optimize</span></div>' +
           '<div style="display:flex;gap:0.8rem;margin-top:0.6rem">' +
@@ -1522,10 +1525,27 @@ window.Ads = window.Ads || {};
           var g = m.querySelector('[data-mact="go"]');
           if (g && !g.disabled) g.textContent = 'Create ' + items.length + ' dark ad' + (items.length === 1 ? '' : 's') + ' (paused)';
         }
-        ['dk-budget', 'dk-countries', 'dk-agemin', 'dk-agemax', 'dk-fb', 'dk-gender'].forEach(function (id) {
+        ['dk-budget', 'dk-days', 'dk-countries', 'dk-agemin', 'dk-agemax', 'dk-fb', 'dk-gender'].forEach(function (id) {
           var n = m.querySelector('#' + id); if (!n) return;
           n.addEventListener(id === 'dk-fb' || id === 'dk-gender' ? 'change' : 'input', disarm);
         });
+        // live plain-money breakdown: total ÷ days ÷ ads, plus the hard end date
+        function updateExplain() {
+          var ex = m.querySelector('#dk-explain'); if (!ex) return;
+          var cur = conf.currency || 'USD';
+          var tot = parseFloat(m.querySelector('#dk-budget').value);
+          var d = Math.min(90, Math.max(1, parseInt(m.querySelector('#dk-days').value, 10) || 0));
+          if (!(tot > 0) || !d) { ex.textContent = 'Set a TOTAL budget and how many days it runs — the campaign stops automatically and can never spend more than the total.'; return; }
+          var endD = new Date(Date.now() + d * 86400 * 1000);
+          var perDay = tot / d, perAd = tot / items.length;
+          ex.innerHTML = '<strong>' + tot + ' ' + esc(cur) + ' total over ' + d + ' day' + (d === 1 ? '' : 's') + '</strong> — about ' +
+            (Math.round(perDay * 100) / 100) + ' ' + esc(cur) + '/day shared by ' + items.length + ' ad' + (items.length === 1 ? '' : 's') +
+            ' ≈ ' + (Math.round(perAd * 100) / 100) + ' ' + esc(cur) + ' per ad overall if they perform equally (Meta gives more to whichever performs better). ' +
+            'Ends automatically on <strong>' + endD.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + '</strong> — total spend can never exceed ' + tot + ' ' + esc(cur) + '.';
+        }
+        updateExplain();
+        m.querySelector('#dk-budget').addEventListener('input', updateExplain);
+        m.querySelector('#dk-days').addEventListener('input', updateExplain);
         // ---- interest chips + AI optimize ----
         m.__ints = [];
         var intBox = m.querySelector('#dk-ints');
@@ -1602,13 +1622,16 @@ window.Ads = window.Ads || {};
         if (act === 'cancel') return Ads.closeModal();
         if (act !== 'go') return;
         var budget = parseFloat(m.querySelector('#dk-budget').value);
-        if (!(budget > 0)) return Ads.toast('Set a daily budget — that is what Meta will spend per day once YOU activate the ads', true);
+        if (!(budget > 0)) return Ads.toast('Set the TOTAL budget — the most this round can ever spend', true);
+        var dkDays = Math.min(90, Math.max(1, parseInt(m.querySelector('#dk-days').value, 10) || 0));
+        if (!dkDays) return Ads.toast('Set how many days the round runs', true);
         var countries = m.querySelector('#dk-countries').value.split(',').map(function (c) { return c.trim().toUpperCase(); }).filter(function (c) { return /^[A-Z]{2}$/.test(c); });
         if (!countries.length) return Ads.toast('Give at least one 2-letter country code (e.g. CA, US)', true);
         var goBtn = m.querySelector('[data-mact="go"]');
         if (!m.__dkArmed) {
           m.__dkArmed = true;
-          if (goBtn) goBtn.textContent = '⚠ Creates a PAUSED campaign with ' + items.length + ' dark ad' + (items.length === 1 ? '' : 's') + ' at ' + budget + ' ' + (conf.currency || 'USD') + '/day — press again to confirm';
+          var endStr = new Date(Date.now() + dkDays * 86400 * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+          if (goBtn) goBtn.textContent = '⚠ PAUSED campaign: ' + items.length + ' ad' + (items.length === 1 ? '' : 's') + ' · ' + budget + ' ' + (conf.currency || 'USD') + ' TOTAL · ' + dkDays + ' day' + (dkDays === 1 ? '' : 's') + ' (ends ' + endStr + ') — press again to confirm';
           return;
         }
         if (goBtn) { goBtn.disabled = true; goBtn.innerHTML = '<span class="spinner"></span> Working…'; }
@@ -1652,7 +1675,7 @@ window.Ads = window.Ads || {};
           if (status) status.innerHTML = '<span class="spinner"></span> Creating the paused campaign on Meta…';
           var genderSel = m.querySelector('#dk-gender').value;
           ai().madsDark({
-            roundId: rid, roundName: r.name, budget: budget, countries: countries,
+            roundId: rid, roundName: r.name, budget: budget, days: dkDays, countries: countries,
             ageMin: m.querySelector('#dk-agemin').value, ageMax: m.querySelector('#dk-agemax').value,
             includeFb: m.querySelector('#dk-fb').checked,
             genders: genderSel === 'women' ? [2] : genderSel === 'men' ? [1] : [],
@@ -1673,7 +1696,7 @@ window.Ads = window.Ads || {};
               var runs = (rF.darkRuns || []).slice();
               if (rF.dark && rF.dark.campaignId && rF.dark.campaignId !== result.campaignId) runs.push(rF.dark);
               updateRound(pid, rid, {
-                dark: { campaignId: result.campaignId, adsetId: result.adsetId, budget: budget, currency: conf.currency || 'USD', at: util.nowISO(), ads: result.ads },
+                dark: { campaignId: result.campaignId, adsetId: result.adsetId, budget: budget, days: dkDays, currency: conf.currency || 'USD', at: util.nowISO(), ads: result.ads },
                 darkRuns: runs
               });
               var actNum = String(conf.adAccountId || '').replace(/^act_/, '');
