@@ -1327,7 +1327,25 @@ function madsDarkRun(jobId, input) {
   var recHasFailures = !!(rec && rec.ads && Object.keys(rec.ads).some(function (k) { return !(rec.ads[k] && rec.ads[k].adId); }));
   var reuse = (rec && rec.campaignId && (rec.state === 'error' || recHasFailures)) ? rec : null;
   function withCampaign(cb2) {
-    if (reuse && reuse.campaignId) { out.campaignId = reuse.campaignId; note('reusing the campaign from the failed attempt…'); return cb2(); }
+    function proceed() {
+      if (reuse && reuse.campaignId) { out.campaignId = reuse.campaignId; note('reusing the campaign from the failed attempt…'); return cb2(); }
+      createCampaign();
+    }
+    // the recorded objects may have been archived/deleted in Ads Manager since
+    // — validate before resuming; a dead record means build fresh
+    if (reuse) {
+      return fbRequest('GET', '/' + (reuse.adsetId || reuse.campaignId), { fields: 'effective_status', access_token: tok }, function (verr, vj) {
+        var st = vj && vj.effective_status;
+        if (verr || st === 'ARCHIVED' || st === 'DELETED') {
+          note('the previous campaign was archived/deleted in Ads Manager — starting fresh…');
+          reuse = null;
+          if (rid && madsRuns[rid]) { delete madsRuns[rid]; saveMadsRuns(); }
+        }
+        proceed();
+      });
+    }
+    proceed();
+    function createCampaign() {
     note('creating campaign…');
     fbRequest('POST', act + '/campaigns', {
       name: 'Ads Hub — ' + (input.roundName || 'round') + ' — ' + new Date().toISOString().slice(0, 10),
@@ -1342,6 +1360,7 @@ function madsDarkRun(jobId, input) {
       ledger('running');
       cb2();
     });
+    }
   }
   withCampaign(function () {
     var targeting = {
