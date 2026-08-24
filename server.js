@@ -1229,7 +1229,12 @@ function fbRequest(method, apiPath, params, cb, timeoutMs) {
       if (j && j.error) msg += ': ' + (j.error.error_user_msg || j.error.message || JSON.stringify(j.error).slice(0, 250));
       else if (txt) msg += ': ' + txt.slice(0, 250);
       var em = new Error(msg);
-      if (j && j.error) em.fb = j.error;   // full structured error — handlers can self-heal (e.g. deprecated interests)
+      if (j && j.error) {
+        em.fb = j.error;   // full structured error — handlers can self-heal (e.g. deprecated interests)
+        // diagnosis trail: Meta's blunt user-facing strings hide the real
+        // code/subcode — keep them in the server log
+        console.log('[mads] ' + method + ' ' + apiPath + ' → code=' + j.error.code + ' subcode=' + (j.error.error_subcode || '-') + ' type=' + (j.error.type || '-') + ' | ' + String(j.error.message || '').slice(0, 200));
+      }
       done(em);
     });
   });
