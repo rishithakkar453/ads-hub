@@ -356,6 +356,36 @@ window.Ads = window.Ads || {};
       });
     });
   }
+  // Scale an existing dark run: pause the losers, add budget/days to the SAME
+  // ad set (no new posts). Same job-polling shape as madsDark.
+  function madsScale(payload, onNote) {
+    return fetch('/api/mads/scale', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ads-Hub': '1' }, body: JSON.stringify(payload)
+    }).then(function (r) {
+      return r.json().then(function (b) {
+        if (r.status === 501) { var e = new Error(b && b.message || 'Dark ads not connected'); e.noKey = true; throw e; }
+        if (!r.ok) throw new Error(b && b.message || 'Scale failed (' + r.status + ')');
+        return b.job;
+      });
+    }).then(function (job) {
+      return new Promise(function (resolve, reject) {
+        var waited = 0;
+        (function poll() {
+          fetch('/api/mads/job?job=' + encodeURIComponent(job), { headers: { 'X-Ads-Hub': '1' } })
+            .then(function (r) { return r.json(); })
+            .then(function (s) {
+              if (s.note && onNote) onNote(s.note);
+              if (s.state === 'done') return resolve(s.result);
+              if (s.state === 'error') return reject(new Error(s.error || 'Meta rejected the change'));
+              waited += 3000;
+              if (waited > 20 * 60 * 1000) return reject(new Error('Still running after 20 minutes — check Ads Manager before retrying'));
+              setTimeout(poll, 3000);
+            })
+            .catch(function () { waited += 3000; setTimeout(poll, 3000); });
+        })();
+      });
+    });
+  }
   // resolve an interest keyword against Meta's detailed-targeting catalog
   function madsInterests(q) {
     return fetch('/api/mads/interests?q=' + encodeURIComponent(q), { headers: { 'X-Ads-Hub': '1' } })
@@ -389,5 +419,5 @@ window.Ads = window.Ads || {};
     });
   }
 
-  Ads.ai = { status: status, setKey: setKey, generateCopy: generateCopy, generateDossier: generateDossier, research: research, audience: audience, landingContent: landingContent, imageConcepts: imageConcepts, genImage: genImage, genImages: genImages, genClip: genClip, geminiStatus: geminiStatus, setGeminiKey: setGeminiKey, geminiVerify: geminiVerify, metaStatus: metaStatus, setMetaKey: setMetaKey, metaVerify: metaVerify, metaStage: metaStage, metaPost: metaPost, metaInsights: metaInsights, madsStatus: madsStatus, setMadsKey: setMadsKey, madsVerify: madsVerify, madsConfig: madsConfig, madsDark: madsDark, madsInsights: madsInsights, madsInterests: madsInterests, darkTarget: darkTarget, mediaPlan: mediaPlan, variationToSpec: variationToSpec, scrape: scrape, editSpec: editSpec };
+  Ads.ai = { status: status, setKey: setKey, generateCopy: generateCopy, generateDossier: generateDossier, research: research, audience: audience, landingContent: landingContent, imageConcepts: imageConcepts, genImage: genImage, genImages: genImages, genClip: genClip, geminiStatus: geminiStatus, setGeminiKey: setGeminiKey, geminiVerify: geminiVerify, metaStatus: metaStatus, setMetaKey: setMetaKey, metaVerify: metaVerify, metaStage: metaStage, metaPost: metaPost, metaInsights: metaInsights, madsStatus: madsStatus, setMadsKey: setMadsKey, madsVerify: madsVerify, madsConfig: madsConfig, madsDark: madsDark, madsScale: madsScale, madsInsights: madsInsights, madsInterests: madsInterests, darkTarget: darkTarget, mediaPlan: mediaPlan, variationToSpec: variationToSpec, scrape: scrape, editSpec: editSpec };
 })();

@@ -463,3 +463,10 @@ input[type="range"]::-moz-range-thumb {
 .igpost-cap { font-size: 1.08rem; color: var(--faint); white-space: pre-wrap; max-height: 5.2rem; overflow: hidden; }
 .igpost-row-state { flex: 0 0 auto; max-width: 22rem; font-size: 1.15rem; color: var(--muted); text-align: right; }
 .igpost-row-state a { color: var(--fg); }
+
+/* Scale-up picker: tick = keep, untick = pause */
+.scl-row { cursor: pointer; }
+.scl-row input[type=checkbox] { flex: 0 0 auto; width: 1.8rem; height: 1.8rem; accent-color: var(--accent, #ff7a3c); margin-right: 0.2rem; }
+.scl-row.is-off { opacity: 0.55; }
+.scl-row.is-drop { opacity: 0.45; }
+.scl-row.is-drop .igpost-row-body strong { text-decoration: line-through; }

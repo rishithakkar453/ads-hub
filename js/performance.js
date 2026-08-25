@@ -1014,6 +1014,12 @@ window.Ads = window.Ads || {};
             if (dkm.likes != null) dbits.push('♥ ' + dkm.likes);
             if (dkm.comments != null) dbits.push('💬 ' + dkm.comments);
           }
+          // a Scale-up pause shows instantly, before the next sync catches up
+          // (and the stale pre-pause status must not sit beside it)
+          if (dk.paused) {
+            if (dkm && dkm.status && dkm.status !== 'PAUSED') dbits.shift();
+            if (dbits.indexOf('paused') < 0) dbits.unshift('paused');
+          }
           igLine += '<div class="rndp-ig">🌑 ' +
             (dkCurrent && dkm && dkm.permalink ? '<a href="' + esc(dkm.permalink) + '" target="_blank" rel="noopener" referrerpolicy="no-referrer" title="opens the ad’s real Instagram post — view while logged in as the account owner">dark ad on Instagram</a> ' : 'dark ad ') +
             (dbits.length ? '· ' + dbits.join(' · ') : '· created paused — stats after next sync') + '</div>';
@@ -1038,8 +1044,10 @@ window.Ads = window.Ads || {};
             '</div>' +
           '</div></div>';
       }).join('');
+      var hasLiveDark = !!(r.dark && r.dark.ads && Object.keys(r.dark.ads).some(function (k4) { return r.dark.ads[k4] && r.dark.ads[k4].adId; }));
       return '<div class="view-section"><div class="section-head"><h2>' + esc(r.name) + '</h2>' +
         '<span class="section-action"><span class="u-label">' + r.adKeys.length + ' ads · ' + tot.clicks + ' clicks · ' + tot.views + ' visits · ' + tot.outs + ' to site' + (tot.spendSet ? ' · ' + money(tot.spend) + ' spent' : '') + '</span>' +
+        (hasLiveDark ? '<button class="btn is-ghost is-sm" data-round-scale="' + esc(r.id) + '" title="pause the losers and put more money on the winners — no new posts">📈 Scale up</button>' : '') +
         '<button class="btn is-ghost is-sm" data-round-dl="' + esc(r.id) + '">⬇ Download all</button>' +
         '<button class="btn is-ghost is-sm" data-round-edit="' + esc(r.id) + '">Edit ads</button>' +
         '<button class="icon-btn" data-round-del2="' + esc(r.id) + '" title="Delete round">' + icons().trash + '</button></span></div>' +
@@ -1115,6 +1123,15 @@ window.Ads = window.Ads || {};
       b.addEventListener('click', function () {
         try { navigator.clipboard.writeText(b.getAttribute('data-copy')); Ads.toast('Link copied — use it as the ad’s destination URL'); }
         catch (e) { Ads.toast('Could not copy', true); }
+      });
+    });
+    el.querySelectorAll('[data-round-scale]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var rid3 = b.getAttribute('data-round-scale');
+        ai().madsStatus().then(function (st) {
+          if (st && st.enabled && st.ok !== false && st.conf && st.conf.adAccountId) return openScaleFlow(p.id, rid3, st.conf);
+          Ads.toast('Dark ads not connected — see Performance → Instagram', true);
+        });
       });
     });
     el.querySelectorAll('[data-round-edit]').forEach(function (b) {
@@ -1752,6 +1769,175 @@ window.Ads = window.Ads || {};
               if (goBtn) { goBtn.disabled = false; goBtn.textContent = 'Retry'; m.__dkArmed = false; }
             });
         }
+      }
+    });
+  }
+  // Narrow a live dark round to its winners: pause the rest and put MORE money
+  // on the SAME ads. Nothing new is posted — the kept ads keep their Instagram
+  // post, likes, comments and Meta's delivery learning.
+  function openScaleFlow(pid, rid, conf) {
+    var p = store.getProject(pid); if (!p) return;
+    var r = projRounds(p).filter(function (x) { return x.id === rid; })[0]; if (!r) return;
+    var run = r.dark;
+    if (!run || !run.ads) return Ads.toast('This round has no live dark-ads run yet', true);
+    var byKey = savedByKey(p);
+    var t = store.getTracking(), dkBy = (t.dark && t.dark.byId) || {};
+    var items = Object.keys(run.ads).filter(function (k) { return run.ads[k] && run.ads[k].adId; }).map(function (k) {
+      var m2 = dkBy[run.ads[k].adId] || {};
+      return { key: k, spec: byKey[k] || null, adId: run.ads[k].adId, paused: !!run.ads[k].paused || m2.status === 'PAUSED', m: m2 };
+    });
+    if (!items.length) return Ads.toast('This round has no live dark ads', true);
+    // winners float to the top: most clicks, then most impressions
+    items.sort(function (a, b) { return ((b.m.clicks || 0) - (a.m.clicks || 0)) || ((b.m.impressions || 0) - (a.m.impressions || 0)); });
+    var cur = (run.currency || conf.currency || 'USD');
+    var curBudget = parseFloat(run.budget) || 0;
+    var curEndMs = run.endTime ? new Date(run.endTime).getTime()
+      : (new Date(run.at).getTime() + (parseInt(run.days, 10) || 0) * 86400 * 1000);
+    var rows = items.map(function (it) {
+      var bits = [];
+      if (it.m.impressions != null) bits.push(it.m.impressions + ' impr');
+      if (it.m.clicks != null) bits.push(it.m.clicks + ' clicks');
+      if (it.m.spend != null) bits.push(it.m.spend + ' ' + cur + ' spent');
+      if (it.m.cpc != null) bits.push(it.m.cpc + '/click');
+      if (it.m.likes != null) bits.push('♥ ' + it.m.likes);
+      return '<label class="igpost-row scl-row' + (it.paused ? ' is-off' : '') + '">' +
+        '<input type="checkbox" data-sclk="' + esc(it.key) + '"' + (it.paused ? '' : ' checked') + '>' +
+        '<div class="igpost-row-thumb cr-stage-scaler" data-sclt="' + esc(it.key) + '"></div>' +
+        '<div class="igpost-row-body"><strong>' + esc(it.spec ? (it.spec.angle || it.spec.name || it.key) : it.key) + '</strong>' +
+          '<span class="u-faint">' + (bits.length ? esc(bits.join(' · ')) : 'no stats yet — Sync live stats first to pick winners on real numbers') + (it.paused ? ' · ⏸ paused' : '') + '</span></div>' +
+      '</label>';
+    }).join('');
+    Ads.modal({
+      title: '📈 Scale up ' + (r.name || 'this round'), wide: true,
+      body: '<p class="u-muted">Keep the winners <strong>ticked</strong> — everything unticked gets <strong>paused</strong>. The money you add goes onto the <strong>same campaign</strong>, so Meta splits it across the ads that stay on. <strong>No new posts are created</strong> — the ads keep their Instagram post, likes and learning.</p>' +
+        '<div class="pp-quick">' +
+          '<div class="field" style="max-width:16rem;margin:0"><label>ADD budget (' + esc(cur) + ')</label><input class="input" id="scl-add" inputmode="decimal" placeholder="0"></div>' +
+          '<div class="field" style="max-width:10rem;margin:0"><label>More days</label><input class="input" id="scl-days" inputmode="numeric" value="3"></div>' +
+          '<span class="u-label" id="scl-count" style="align-self:flex-end;padding-bottom:0.8rem"></span>' +
+          '<span style="margin-left:auto;align-self:flex-end;display:flex;gap:0.6rem;padding-bottom:0.4rem">' +
+            '<button class="btn is-ghost is-sm" id="scl-all">Keep all</button>' +
+            '<button class="btn is-ghost is-sm" id="scl-none">Keep none</button>' +
+          '</span>' +
+        '</div>' +
+        '<p class="u-faint" id="scl-explain" style="margin:0.4rem 0 1rem;font-size:1.18rem"></p>' +
+        '<div class="igpost-list">' + rows + '</div>' +
+        '<div class="gh-status" id="scl-status"></div>',
+      foot: [
+        { label: 'Apply', act: 'go', primary: true },
+        { label: 'Cancel', act: 'cancel', ghost: true }
+      ],
+      onMount: function (m) {
+        m.querySelectorAll('[data-sclt]').forEach(function (n) {
+          var it = items.filter(function (x) { return x.key === n.getAttribute('data-sclt'); })[0];
+          if (it && it.spec) { try { mountThumbFitted(n, it.spec, 90, 110); } catch (e) {} }
+        });
+        function boxes() { return Array.prototype.slice.call(m.querySelectorAll('[data-sclk]')); }
+        function itemFor(k5) { return items.filter(function (x) { return x.key === k5; })[0]; }
+        // what runs must be exactly what was confirmed — any edit disarms
+        function disarm() {
+          m.__sclArmed = false; m.__sclIdem = '';
+          var g = m.querySelector('[data-mact="go"]');
+          if (g && !g.disabled) g.textContent = 'Apply';
+        }
+        m.__sclCalc = function () {
+          var keepKeys = [], pauseN = 0;
+          boxes().forEach(function (b) {
+            var it = itemFor(b.getAttribute('data-sclk'));
+            if (b.checked) keepKeys.push(b.getAttribute('data-sclk'));
+            else if (it && !it.paused) pauseN++;
+          });
+          return { keepKeys: keepKeys, pauseN: pauseN };
+        };
+        function updateExplain() {
+          var c = m.__sclCalc();
+          var add = parseFloat(m.querySelector('#scl-add').value) || 0;
+          var d = Math.min(90, Math.max(0, parseInt(m.querySelector('#scl-days').value, 10) || 0));
+          var cnt = m.querySelector('#scl-count');
+          if (cnt) cnt.textContent = 'keeping ' + c.keepKeys.length + ' of ' + items.length;
+          var ex = m.querySelector('#scl-explain'); if (!ex) return;
+          var newTotal = Math.round((curBudget + add) * 100) / 100;
+          var endMs = d ? Math.max(Date.now(), curEndMs) + d * 86400 * 1000 : curEndMs;
+          var endStr = new Date(endMs).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+          var perAd = c.keepKeys.length ? Math.round(newTotal / c.keepKeys.length * 100) / 100 : 0;
+          ex.innerHTML = (c.pauseN ? '<strong>Pauses ' + c.pauseN + ' ad' + (c.pauseN === 1 ? '' : 's') + '</strong>, keeps ' : 'Keeps ') + c.keepKeys.length + ' running. ' +
+            (add > 0 ? 'Adds <strong>' + add + ' ' + esc(cur) + '</strong> → hard cap ≈ ' + newTotal + ' ' + esc(cur) + ' total (including what already ran)' : 'No extra money') +
+            (d ? ', runs until <strong>' + endStr + '</strong>. ' : '. ') +
+            (add > 0 && c.keepKeys.length ? 'Meta splits the remaining money across the ' + c.keepKeys.length + ' kept ad' + (c.keepKeys.length === 1 ? '' : 's') + ' (≈ ' + perAd + ' ' + esc(cur) + ' each if equal — better performers get more).' : '');
+        }
+        boxes().forEach(function (b) {
+          b.addEventListener('change', function () {
+            var row = b.closest('.scl-row'), it = itemFor(b.getAttribute('data-sclk'));
+            if (row && it && !it.paused) row.classList.toggle('is-drop', !b.checked);
+            disarm(); updateExplain();
+          });
+        });
+        ['scl-add', 'scl-days'].forEach(function (id) {
+          m.querySelector('#' + id).addEventListener('input', function () { disarm(); updateExplain(); });
+        });
+        m.querySelector('#scl-all').addEventListener('click', function () {
+          boxes().forEach(function (b) { b.checked = true; var row = b.closest('.scl-row'); if (row) row.classList.remove('is-drop'); });
+          disarm(); updateExplain();
+        });
+        m.querySelector('#scl-none').addEventListener('click', function () {
+          boxes().forEach(function (b) {
+            b.checked = false;
+            var row = b.closest('.scl-row'), it = itemFor(b.getAttribute('data-sclk'));
+            if (row && it && !it.paused) row.classList.add('is-drop');
+          });
+          disarm(); updateExplain();
+        });
+        updateExplain();
+      },
+      onAction: function (act, m) {
+        if (act === 'cancel') return Ads.closeModal();
+        if (act !== 'go') return;
+        var cc = m.__sclCalc();
+        var add = parseFloat(m.querySelector('#scl-add').value) || 0;
+        var d = Math.min(90, Math.max(0, parseInt(m.querySelector('#scl-days').value, 10) || 0));
+        if (add < 0) return Ads.toast('The added budget can’t be negative', true);
+        if (add > 0 && !cc.keepKeys.length) return Ads.toast('Adding money with every ad paused would spend on nothing — keep at least one', true);
+        if (!add && !d && !cc.pauseN) return Ads.toast('Nothing to change — untick ads to pause them, or add money/days', true);
+        var goBtn = m.querySelector('[data-mact="go"]');
+        if (!m.__sclArmed) {
+          m.__sclArmed = true;
+          // one idem per confirmed intent: a Retry after an error reuses it so
+          // the same money can never be added twice
+          if (!m.__sclIdem) m.__sclIdem = 'scale:' + rid + ':' + Date.now().toString(36);
+          if (goBtn) goBtn.textContent = '⚠ LIVE campaign: pause ' + cc.pauseN + ' · keep ' + cc.keepKeys.length +
+            (add > 0 ? ' · +' + add + ' ' + cur + ' (new cap ≈ ' + (Math.round((curBudget + add) * 100) / 100) + ' ' + cur + ')' : '') +
+            (d ? ' · +' + d + ' day' + (d === 1 ? '' : 's') : '') + ' — press again to confirm';
+          return;
+        }
+        if (goBtn) { goBtn.disabled = true; goBtn.innerHTML = '<span class="spinner"></span> Working…'; }
+        var status = m.querySelector('#scl-status');
+        ai().madsScale({ roundId: rid, keep: cc.keepKeys, addBudget: add, days: d, idem: m.__sclIdem },
+          function (note) { if (status) status.innerHTML = '<span class="spinner"></span> ' + esc(note); })
+          .then(function (result) {
+            // persist the new shape of the live run: paused flags + cap + end
+            var pF = store.getProject(pid);
+            var rF = (pF && projRounds(pF).filter(function (x) { return x.id === rid; })[0]) || r;
+            var dark2 = JSON.parse(JSON.stringify(rF.dark || run));
+            (result.paused || []).forEach(function (k6) { if (dark2.ads[k6]) dark2.ads[k6].paused = true; });
+            if (result.newBudget != null) dark2.budget = result.newBudget;
+            if (result.endTime) dark2.endTime = result.endTime;
+            dark2.scaledAt = util.nowISO();
+            updateRound(pid, rid, { dark: dark2 });
+            var actNum = String(conf.adAccountId || '').replace(/^act_/, '');
+            var endStr2 = result.endTime ? new Date(result.endTime).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
+            var errN = Object.keys(result.pauseErrors || {}).length;
+            if (status) status.innerHTML = '✓ ' + (result.paused || []).length + ' paused · ' + result.kept + ' kept · hard cap ' + result.newBudget + ' ' + esc(cur) +
+              (endStr2 ? ' · runs until ' + endStr2 : '') +
+              (errN ? ' · <span style="color:var(--bad,#e5704f)">' + errN + ' pause' + (errN === 1 ? '' : 's') + ' failed — finish in <a href="https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=' + esc(actNum) + '" target="_blank" rel="noopener">Ads Manager</a></span>' : '') +
+              ((result.keptButPaused || []).length ? ' · note: ' + result.keptButPaused.length + ' kept ad' + (result.keptButPaused.length === 1 ? ' is' : 's are') + ' still paused from before — switch them on in <a href="https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=' + esc(actNum) + '" target="_blank" rel="noopener">Ads Manager</a> if you want them back' : '');
+            if (goBtn) { goBtn.textContent = 'Done'; goBtn.disabled = false; goBtn.setAttribute('data-mact', 'cancel'); }
+            Ads.toast('Round scaled — same ads, more money behind the winners');
+            Ads.go('rounds');
+          })
+          .catch(function (e) {
+            if (status) status.innerHTML = '<span style="color:var(--bad,#e5704f)">✗ ' + esc((e.message || 'failed').slice(0, 200)) + '</span>';
+            // keep __sclIdem: retrying the SAME confirmed intent must not double-apply
+            if (goBtn) { goBtn.disabled = false; goBtn.textContent = 'Retry'; m.__sclArmed = false; }
+          });
       }
     });
   }

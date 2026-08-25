@@ -1523,6 +1523,105 @@ function madsDarkRun(jobId, input) {
   });
 }
 
+// Scale an EXISTING dark-ads run instead of posting fresh ads: pause the ads
+// that didn't make the cut and put more money/days on the SAME ad set. The
+// winners keep their ad objects — Instagram post, likes, comments and Meta's
+// learning all survive. Nothing is ever switched ON here: kept ads stay in
+// whatever state the user last gave them in Ads Manager.
+function madsScaleRun(jobId, input) {
+  var tok = effectiveMadsToken();
+  var job = igJobs[jobId];
+  var rid = String(input.roundId || '');
+  var rec = madsRuns[rid];
+  function fail(e) { if (job) { job.state = 'error'; job.error = String(e && e.message || e).slice(0, 400); } }
+  function note(t) { if (job) { job.note = t; job.at = Date.now(); } }
+  if (!tok) return fail(new Error('no_mads_token'));
+  if (!rec || !rec.campaignId || !rec.adsetId || !rec.ads) return fail(new Error('No dark-ads run is recorded for this round — post it as dark ads first.'));
+  var mult = MADS_OFFSET_ONE[String((madsConf && madsConf.currency) || 'USD').toUpperCase()] ? 1 : 100;
+  var addMinor = Math.round((parseFloat(input.addBudget) || 0) * mult);
+  var days = Math.min(90, Math.max(0, parseInt(input.days, 10) || 0));
+  var idem = String(input.idem || '');
+  // a retry of the SAME confirmed intent (job swept / crash mid-pause) must
+  // never add the money twice — the ledger remembers which idem already paid
+  var alreadyApplied = !!(idem && rec.lastScale && rec.lastScale.idem === idem);
+  var keep = {};
+  (Array.isArray(input.keep) ? input.keep : []).forEach(function (k) { keep[String(k)] = 1; });
+  var loserKeys = Object.keys(rec.ads).filter(function (k) {
+    return rec.ads[k] && rec.ads[k].adId && !keep[k] && !rec.ads[k].paused;
+  });
+  if (!(addMinor > 0) && !days && !loserKeys.length) return fail(new Error('Nothing to change — untick ads to pause them, or add money/days.'));
+  if (addMinor > 0 && !Object.keys(keep).length) return fail(new Error('Adding money with every ad paused would spend on nothing — keep at least one ad.'));
+  note('reading the live ad set…');
+  fbRequest('GET', '/' + rec.adsetId, { fields: 'lifetime_budget,end_time,effective_status', access_token: tok }, function (gerr, gj) {
+    if (gerr) return fail(gerr);
+    var st = gj.effective_status;
+    if (st === 'ARCHIVED' || st === 'DELETED') return fail(new Error('That campaign was archived/deleted in Ads Manager — this round would need a fresh dark-ads run instead.'));
+    var curMinor = parseInt(gj.lifetime_budget, 10) || 0;
+    var curEnd = gj.end_time ? new Date(gj.end_time).getTime() : Date.now();
+    var newMinor = alreadyApplied ? curMinor : curMinor + addMinor;
+    var newEndMs = alreadyApplied ? (rec.lastScale.endTimeMs || curEnd)
+      : (days ? Math.max(Date.now(), curEnd) + days * 86400 * 1000 : curEnd);
+    if (!alreadyApplied && addMinor > 0 && !days && curEnd <= Date.now()) {
+      return fail(new Error('This round already ended — add at least 1 day so the extra money can actually be spent.'));
+    }
+    function afterUpdate() {
+      // durable record BEFORE the slow pause loop: from here on this idem is "paid"
+      rec.lastScale = {
+        idem: idem, at: Date.now(), newBudget: newMinor / mult, endTimeMs: newEndMs,
+        keptButPaused: Object.keys(rec.ads).filter(function (k) { return keep[k] && rec.ads[k] && rec.ads[k].paused; })
+      };
+      saveMadsRuns();
+      var i = 0, pausedNow = [], pauseErrors = {};
+      (function nextPause() {
+        if (i >= loserKeys.length) {
+          var result = {
+            campaignId: rec.campaignId, adsetId: rec.adsetId,
+            newBudget: newMinor / mult, endTime: new Date(newEndMs).toISOString(),
+            kept: Object.keys(keep).length, paused: pausedNow, pauseErrors: pauseErrors,
+            keptButPaused: rec.lastScale.keptButPaused
+          };
+          rec.lastScale.result = result;   // replayed verbatim on an idem retry
+          saveMadsRuns();
+          if (job) { job.state = 'done'; job.result = result; }
+          return;
+        }
+        var k = loserKeys[i++];
+        note('pausing ad ' + i + '/' + loserKeys.length + '…');
+        var tried = 0;
+        (function pauseOne() {
+          fbRequest('POST', '/' + rec.ads[k].adId, { status: 'PAUSED', access_token: tok }, function (perr) {
+            if (perr) {
+              var code = perr.fb && perr.fb.code;
+              // rate limits (many pauses in a row): back off once, then record
+              // the miss and keep going rather than dying mid-list
+              if (!tried++ && (code === 17 || code === 613 || code === 80004 || code === 4 || code === 32)) {
+                note('Meta rate limit — waiting 30s before ad ' + i + '/' + loserKeys.length + '…');
+                return setTimeout(pauseOne, 30000);
+              }
+              pauseErrors[k] = perr.message.slice(0, 150);
+              return setTimeout(nextPause, 400);
+            }
+            rec.ads[k].paused = true;
+            pausedNow.push(k);
+            saveMadsRuns();
+            setTimeout(nextPause, 400);
+          });
+        })();
+      })();
+    }
+    var upd = { access_token: tok };
+    if (!alreadyApplied && addMinor > 0) upd.lifetime_budget = newMinor;
+    if (!alreadyApplied && days) upd.end_time = new Date(newEndMs).toISOString();
+    if (upd.lifetime_budget != null || upd.end_time) {
+      note(addMinor > 0 ? 'raising the budget on the existing ad set…' : 'extending the end date…');
+      fbRequest('POST', '/' + rec.adsetId, upd, function (uerr) {
+        if (uerr) return fail(uerr);
+        afterUpdate();
+      });
+    } else afterUpdate();
+  });
+}
+
 /* ---- Transcription proxy (local transcribe-hub on :3004) ------------------ */
 // The uploaded project video is already on disk — stream it to the local
 // whisper tool and let the client poll for the transcript. Nothing leaves
@@ -2574,6 +2673,34 @@ var server = http.createServer(function (req, res) {
       madsDarkRun(jobId, input);
       sendJSON(res, 200, { ok: true, job: jobId, state: 'running' });
     }, 80 * 1024 * 1024);
+  }
+  // Scale an existing dark-ads run: pause the losers, add money/days to the
+  // SAME ad set — no new ads are ever posted. Async job like /api/mads/dark.
+  if (pathname === '/api/mads/scale' && req.method === 'POST') {
+    if (!requireAppHeader(req, res)) return;
+    if (!effectiveMadsToken()) return sendJSON(res, 501, { error: 'no_mads_token', message: 'Connect the dark-ads token first (Performance → Instagram).' });
+    return readBody(req, function (raw) {
+      var input; try { input = raw ? JSON.parse(raw) : {}; } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
+      var rid = String(input.roundId || '');
+      if (!rid || !madsRuns[rid]) return sendJSON(res, 400, { error: 'bad_args', message: 'No dark-ads run is recorded for this round.' });
+      var idem = String(input.idem || '').slice(0, 120);
+      if (idem && igJobs[idem] && igJobs[idem].state !== 'error') {
+        return sendJSON(res, 200, { ok: true, job: idem, state: igJobs[idem].state });
+      }
+      // durable dedupe: this exact confirmed intent already ran to completion
+      // (job swept / server restarted) — hand back the recorded result instead
+      // of adding the money a second time
+      var recS = madsRuns[rid];
+      if (idem && recS.lastScale && recS.lastScale.idem === idem && recS.lastScale.result) {
+        var replayId = 'scl-' + Date.now().toString(36) + crypto.randomBytes(3).toString('hex');
+        igJobs[replayId] = { state: 'done', at: Date.now(), result: recS.lastScale.result };
+        return sendJSON(res, 200, { ok: true, job: replayId, state: 'done', recovered: true });
+      }
+      var jobId = idem || ('scl-' + Date.now().toString(36) + crypto.randomBytes(4).toString('hex'));
+      igJobs[jobId] = { state: 'running', at: Date.now(), note: 'starting…' };
+      madsScaleRun(jobId, input);
+      sendJSON(res, 200, { ok: true, job: jobId, state: 'running' });
+    }, 256 * 1024);
   }
   if (pathname === '/api/mads/job' && req.method === 'GET') {
     if (!requireAppHeader(req, res)) return;
