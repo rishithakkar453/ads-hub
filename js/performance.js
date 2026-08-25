@@ -368,26 +368,45 @@ window.Ads = window.Ads || {};
   }
   // adKey → approved ad record (for a thumbnail + a link to the full ad detail)
   function adsByKey() { var m = {}; store.allAds().forEach(function (a) { if (a.adKey) m[a.adKey] = a; }); return m; }
-  // adKey → real Instagram post URL, wherever one exists: organic posts carry
-  // it directly; dark ads get it from the synced insights (keyed by Meta ad id)
+  // the Page id behind dark ads — needed for the (always-public) Ad Library
+  // link. Synchronous with async self-population: first render kicks off one
+  // status fetch, then re-renders once it lands.
+  var madsPageIdCache = null, madsPageIdFetching = false;
+  function darkPageId() {
+    if (madsPageIdCache) return madsPageIdCache;
+    var dk = (store.getTracking().dark || {}).byId || {};
+    Object.keys(dk).some(function (id) {
+      if (dk[id] && dk[id].pageId) { madsPageIdCache = dk[id].pageId; return true; }
+      return false;
+    });
+    if (madsPageIdCache) return madsPageIdCache;
+    if (!madsPageIdFetching) {
+      madsPageIdFetching = true;
+      ai().madsStatus().then(function (st) {
+        if (st && st.conf && st.conf.pageId) {
+          madsPageIdCache = st.conf.pageId;
+          if (roundsOpenProject) Ads.go('rounds');   // links appear without a manual sync
+        }
+      }).catch(function () {});
+    }
+    return '';
+  }
+  // adKey → a link that ACTUALLY opens in any browser: organic posts use their
+  // public permalink; dark ads use the Ad Library listing (dark-post
+  // permalinks only render inside the Instagram app — never link them here)
   function igLinksByAdKey() {
     var map = {};   // adKey → { url, lbl }
-    var dk = (store.getTracking().dark || {}).byId || {};
     store.listProjects().forEach(function (p) {
       (p.rounds || []).forEach(function (r) {
         Object.keys(r.igPosts || {}).forEach(function (k) {
-          // organic posts are public — their permalink works everywhere
           if (r.igPosts[k] && r.igPosts[k].permalink) map[k] = { url: r.igPosts[k].permalink, lbl: 'on Instagram ↗' };
         });
         [r.dark].concat(r.darkRuns || []).forEach(function (d) {
           if (!d) return;
           Object.keys(d.ads || {}).forEach(function (k) {
             var a = d.ads[k];
-            if (map[k] || !a || !a.adId || !dk[a.adId]) return;
-            // dark posts only render inside the IG app — link the public
-            // Ad Library listing instead
-            if (dk[a.adId].pageId) map[k] = { url: 'https://www.facebook.com/ads/library/?active_status=all&ad_type=all&country=ALL&view_all_page_id=' + dk[a.adId].pageId, lbl: 'in Ad Library ↗' };
-            else if (dk[a.adId].permalink) map[k] = { url: dk[a.adId].permalink, lbl: 'IG app ↗' };
+            if (map[k] || !a || !a.adId) return;
+            if (darkPageId()) map[k] = { url: 'https://www.facebook.com/ads/library/?active_status=all&ad_type=all&country=ALL&view_all_page_id=' + darkPageId(), lbl: 'in Ad Library ↗' };
           });
         });
       });
@@ -1031,10 +1050,9 @@ window.Ads = window.Ads || {};
             if (dkm.likes != null) dbits.push('♥ ' + dkm.likes);
             if (dkm.comments != null) dbits.push('💬 ' + dkm.comments);
           }
-          var adLib = dkm && dkm.pageId ? 'https://www.facebook.com/ads/library/?active_status=all&ad_type=all&country=ALL&view_all_page_id=' + esc(dkm.pageId) : '';
+          var adLib = darkPageId() ? 'https://www.facebook.com/ads/library/?active_status=all&ad_type=all&country=ALL&view_all_page_id=' + esc(darkPageId()) : '';
           igLine += '<div class="rndp-ig">🌑 ' +
-            (adLib ? '<a href="' + adLib + '" target="_blank" rel="noopener" title="public listing of your running ads — works everywhere">dark ad — see it in Ad Library</a> ' : 'dark ad ') +
-            (dkm && dkm.permalink ? '· <a href="' + esc(dkm.permalink) + '" target="_blank" rel="noopener" title="the raw post — only renders inside the Instagram app">IG app</a> ' : '') +
+            (adLib ? '<a href="' + adLib + '" target="_blank" rel="noopener" title="public listing of your running ads — works in any browser, no login">dark ad — see it in Ad Library</a> ' : 'dark ad ') +
             (dbits.length ? '· ' + dbits.join(' · ') : '· created paused — stats after next sync') + '</div>';
         }
         return '<div class="rndp-card">' +
