@@ -116,7 +116,9 @@ var madsLastError = '';
 var madsConf = null;   // { adAccountId, adAccountName, currency, pageId, pageName, igUserId, igUsername, accounts[], pages[] }
 try { madsConf = JSON.parse(fs.readFileSync(MADS_CONF_FILE, 'utf8')); } catch (e) {}
 function saveMadsConf() {
-  try { fs.mkdirSync(path.dirname(MADS_CONF_FILE), { recursive: true }); fs.writeFileSync(MADS_CONF_FILE, JSON.stringify(madsConf), { mode: 0o666 }); } catch (e) {}
+  // chmod after write: the create-time mode is umask-masked (root's 022 turns
+  // 0666 into 644 and silently locks the OTHER instance out) — chmod isn't
+  try { fs.mkdirSync(path.dirname(MADS_CONF_FILE), { recursive: true }); fs.writeFileSync(MADS_CONF_FILE, JSON.stringify(madsConf), { mode: 0o666 }); try { fs.chmodSync(MADS_CONF_FILE, 0o666); } catch (e2) {} } catch (e) { console.log('[mads] conf write FAILED: ' + e.message); }
 }
 var FB_GRAPH_HOST = 'graph.facebook.com';
 // Durable ledger of every dark-ads run, keyed by round id. In-memory jobs die
@@ -126,7 +128,21 @@ var MADS_RUNS_FILE = path.join(__dirname, 'data', 'mads-runs.json');
 var madsRuns = {};
 try { madsRuns = JSON.parse(fs.readFileSync(MADS_RUNS_FILE, 'utf8')) || {}; } catch (e) {}
 function saveMadsRuns() {
-  try { fs.mkdirSync(path.dirname(MADS_RUNS_FILE), { recursive: true }); fs.writeFileSync(MADS_RUNS_FILE, JSON.stringify(madsRuns), { mode: 0o666 }); } catch (e) {}
+  try { fs.mkdirSync(path.dirname(MADS_RUNS_FILE), { recursive: true }); fs.writeFileSync(MADS_RUNS_FILE, JSON.stringify(madsRuns), { mode: 0o666 }); try { fs.chmodSync(MADS_RUNS_FILE, 0o666); } catch (e2) {} } catch (e) { console.log('[mads] LEDGER write FAILED (' + e.message + ') — run records may be lost'); }
+}
+// Two instances (docker + host) share this file and each keeps it in memory —
+// merge the disk copy in (newest .at per round wins) before any read/decide,
+// so a run made on the other instance is never invisible here (and never
+// clobbered by our next save).
+function freshMadsRuns() {
+  try {
+    var d = JSON.parse(fs.readFileSync(MADS_RUNS_FILE, 'utf8')) || {};
+    Object.keys(d).forEach(function (k) {
+      var mem = madsRuns[k];
+      if (!mem || (d[k].at || 0) >= (mem.at || 0)) madsRuns[k] = d[k];
+    });
+  } catch (e) {}
+  return madsRuns;
 }
 // Meta budgets are in the account currency's MINOR unit — offset 100 for
 // USD/CAD/EUR etc, but 1 for zero-decimal currencies. Hardcoding ×100 would
@@ -1147,6 +1163,7 @@ function igRefresh() {
     fs.mkdir(path.dirname(IG_TOKEN_FILE), { recursive: true }, function () {
       fs.writeFile(IG_TOKEN_FILE, j.access_token, { mode: 0o666 }, function (werr) {
         igTokenPersisted = !werr;
+        if (!werr) fs.chmod(IG_TOKEN_FILE, 0o666, function () {});   // create-mode is umask-masked
         console.log('[ads-hub] IG token refreshed (expires in ' + Math.round((j.expires_in || 0) / 86400) + 'd)');
       });
     });
@@ -1326,7 +1343,7 @@ function madsDarkRun(jobId, input) {
   // runs that finished but with per-ad errors (e.g. the dev-mode creative
   // block): those RESUME too; only a fully-successful run means a new
   // campaign on the next deliberate re-run.
-  var rec = rid ? madsRuns[rid] : null;
+  var rec = rid ? freshMadsRuns()[rid] : null;
   var recHasFailures = !!(rec && rec.ads && Object.keys(rec.ads).some(function (k) { return !(rec.ads[k] && rec.ads[k].adId); }));
   var reuse = (rec && rec.campaignId && (rec.state === 'error' || recHasFailures)) ? rec : null;
   function withCampaign(cb2) {
@@ -1532,9 +1549,12 @@ function madsScaleRun(jobId, input) {
   var tok = effectiveMadsToken();
   var job = igJobs[jobId];
   var rid = String(input.roundId || '');
-  var rec = madsRuns[rid];
+  var rec = freshMadsRuns()[rid];
   function fail(e) { if (job) { job.state = 'error'; job.error = String(e && e.message || e).slice(0, 400); } }
   function note(t) { if (job) { job.note = t; job.at = Date.now(); } }
+  // rec is authoritative for the whole run — re-assert it into the shared map
+  // on every write in case a concurrent freshMadsRuns() merge swapped it out
+  function ledgerSave() { rec.at = Date.now(); madsRuns[rid] = rec; saveMadsRuns(); }
   if (!tok) return fail(new Error('no_mads_token'));
   if (!rec || !rec.campaignId || !rec.adsetId || !rec.ads) return fail(new Error('No dark-ads run is recorded for this round — post it as dark ads first.'));
   var mult = MADS_OFFSET_ONE[String((madsConf && madsConf.currency) || 'USD').toUpperCase()] ? 1 : 100;
@@ -1570,7 +1590,7 @@ function madsScaleRun(jobId, input) {
         idem: idem, at: Date.now(), newBudget: newMinor / mult, endTimeMs: newEndMs,
         keptButPaused: Object.keys(rec.ads).filter(function (k) { return keep[k] && rec.ads[k] && rec.ads[k].paused; })
       };
-      saveMadsRuns();
+      ledgerSave();
       var i = 0, pausedNow = [], pauseErrors = {};
       (function nextPause() {
         if (i >= loserKeys.length) {
@@ -1581,7 +1601,7 @@ function madsScaleRun(jobId, input) {
             keptButPaused: rec.lastScale.keptButPaused
           };
           rec.lastScale.result = result;   // replayed verbatim on an idem retry
-          saveMadsRuns();
+          ledgerSave();
           if (job) { job.state = 'done'; job.result = result; }
           return;
         }
@@ -1603,7 +1623,7 @@ function madsScaleRun(jobId, input) {
             }
             rec.ads[k].paused = true;
             pausedNow.push(k);
-            saveMadsRuns();
+            ledgerSave();
             setTimeout(nextPause, 400);
           });
         })();
@@ -2481,6 +2501,7 @@ var server = http.createServer(function (req, res) {
       return fs.mkdir(path.dirname(IG_TOKEN_FILE), { recursive: true }, function () {
         fs.writeFile(IG_TOKEN_FILE, k, { mode: 0o666 }, function (werr) {
           igTokenPersisted = !werr;
+          if (!werr) fs.chmod(IG_TOKEN_FILE, 0o666, function () {});   // create-mode is umask-masked
           // verify immediately so the user learns right away if the token is bad
           igVerify(function (verr, u) {
             sendJSON(res, 200, { enabled: true, source: igTokenSource(), persisted: !werr, ok: !verr, username: (u && u.username) || '', error: verr ? verr.message : '' });
@@ -2611,6 +2632,7 @@ var server = http.createServer(function (req, res) {
       return fs.mkdir(path.dirname(MADS_TOKEN_FILE), { recursive: true }, function () {
         fs.writeFile(MADS_TOKEN_FILE, k, { mode: 0o666 }, function (werr) {
           madsTokenPersisted = !werr;
+          if (!werr) fs.chmod(MADS_TOKEN_FILE, 0o666, function () {});   // create-mode is umask-masked
           madsVerify(function (verr, conf) {
             sendJSON(res, 200, { enabled: true, source: madsTokenSource(), persisted: !werr, ok: !verr, error: verr ? verr.message : '', conf: conf || null });
           });
@@ -2660,7 +2682,7 @@ var server = http.createServer(function (req, res) {
       // returns the recorded campaign instead of building a lookalike twin.
       // Deliberate re-runs use a campaignId-suffixed idem and pass through.
       var ridReq = String(input.roundId);
-      var recR = madsRuns[ridReq];
+      var recR = freshMadsRuns()[ridReq];
       var recClean = !!(recR && recR.state === 'done' && recR.campaignId && recR.ads &&
         Object.keys(recR.ads).length && Object.keys(recR.ads).every(function (k) { return recR.ads[k] && recR.ads[k].adId; }));
       if (/:first$/.test(idem) && recClean) {
@@ -2682,7 +2704,7 @@ var server = http.createServer(function (req, res) {
     return readBody(req, function (raw) {
       var input; try { input = raw ? JSON.parse(raw) : {}; } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
       var rid = String(input.roundId || '');
-      if (!rid || !madsRuns[rid]) return sendJSON(res, 400, { error: 'bad_args', message: 'No dark-ads run is recorded for this round.' });
+      if (!rid || !freshMadsRuns()[rid]) return sendJSON(res, 400, { error: 'bad_args', message: 'No dark-ads run is recorded for this round.' });
       var idem = String(input.idem || '').slice(0, 120);
       if (idem && igJobs[idem] && igJobs[idem].state !== 'error') {
         return sendJSON(res, 200, { ok: true, job: idem, state: igJobs[idem].state });
