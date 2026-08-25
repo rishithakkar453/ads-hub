@@ -371,18 +371,23 @@ window.Ads = window.Ads || {};
   // adKey → real Instagram post URL, wherever one exists: organic posts carry
   // it directly; dark ads get it from the synced insights (keyed by Meta ad id)
   function igLinksByAdKey() {
-    var map = {};
+    var map = {};   // adKey → { url, lbl }
     var dk = (store.getTracking().dark || {}).byId || {};
     store.listProjects().forEach(function (p) {
       (p.rounds || []).forEach(function (r) {
         Object.keys(r.igPosts || {}).forEach(function (k) {
-          if (r.igPosts[k] && r.igPosts[k].permalink) map[k] = r.igPosts[k].permalink;
+          // organic posts are public — their permalink works everywhere
+          if (r.igPosts[k] && r.igPosts[k].permalink) map[k] = { url: r.igPosts[k].permalink, lbl: 'on Instagram ↗' };
         });
         [r.dark].concat(r.darkRuns || []).forEach(function (d) {
           if (!d) return;
           Object.keys(d.ads || {}).forEach(function (k) {
             var a = d.ads[k];
-            if (a && a.adId && dk[a.adId] && dk[a.adId].permalink && !map[k]) map[k] = dk[a.adId].permalink;
+            if (map[k] || !a || !a.adId || !dk[a.adId]) return;
+            // dark posts only render inside the IG app — link the public
+            // Ad Library listing instead
+            if (dk[a.adId].pageId) map[k] = { url: 'https://www.facebook.com/ads/library/?active_status=all&ad_type=all&country=ALL&view_all_page_id=' + dk[a.adId].pageId, lbl: 'in Ad Library ↗' };
+            else if (dk[a.adId].permalink) map[k] = { url: dk[a.adId].permalink, lbl: 'IG app ↗' };
           });
         });
       });
@@ -502,7 +507,7 @@ window.Ads = window.Ads || {};
         '<td><div class="cr-cell">' + (matched ? '<div class="cr-thumb" data-thumb-ad="' + matched.id + '"></div>' : '<div class="cr-thumb trk-nothumb">' + icons().globe + '</div>') +
           '<div style="min-width:0"><div class="ac-name u-truncate">' + esc(r.name) + '</div>' +
           '<div class="u-faint" style="font-size:1.05rem">' + (r.page ? '/p/' + esc(r.page) : esc(r.headline)).slice(0, 60) +
-          (igLinks[r.key] ? ' · <a href="' + esc(igLinks[r.key]) + '" target="_blank" rel="noopener" data-stop="1" title="the real post — opens in Instagram (view logged in / in the app)">on Instagram ↗</a>' : '') +
+          (igLinks[r.key] ? ' · <a href="' + esc(igLinks[r.key].url) + '" target="_blank" rel="noopener" data-stop="1">' + esc(igLinks[r.key].lbl) + '</a>' : '') +
           '</div></div></div></td>' +
         '<td class="trk-src">' + srcChips(r.bySrc) + '</td>' +
         '<td class="num">' + util.fmtNum(r.clicks, 0) + '</td>' +
@@ -1026,8 +1031,10 @@ window.Ads = window.Ads || {};
             if (dkm.likes != null) dbits.push('♥ ' + dkm.likes);
             if (dkm.comments != null) dbits.push('💬 ' + dkm.comments);
           }
+          var adLib = dkm && dkm.pageId ? 'https://www.facebook.com/ads/library/?active_status=all&ad_type=all&country=ALL&view_all_page_id=' + esc(dkm.pageId) : '';
           igLine += '<div class="rndp-ig">🌑 ' +
-            (dkm && dkm.permalink ? '<a href="' + esc(dkm.permalink) + '" target="_blank" rel="noopener" title="the real post — Instagram only shows it while you’re logged in (best in the app on your phone)">dark ad on Instagram</a> ' : 'dark ad ') +
+            (adLib ? '<a href="' + adLib + '" target="_blank" rel="noopener" title="public listing of your running ads — works everywhere">dark ad — see it in Ad Library</a> ' : 'dark ad ') +
+            (dkm && dkm.permalink ? '· <a href="' + esc(dkm.permalink) + '" target="_blank" rel="noopener" title="the raw post — only renders inside the Instagram app">IG app</a> ' : '') +
             (dbits.length ? '· ' + dbits.join(' · ') : '· created paused — stats after next sync') + '</div>';
         }
         return '<div class="rndp-card">' +

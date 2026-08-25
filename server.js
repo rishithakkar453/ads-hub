@@ -2615,6 +2615,8 @@ var server = http.createServer(function (req, res) {
                 byId[id].comments = mj.comments_count != null ? +mj.comments_count : null;
                 byId[id].permalink = mj.permalink || '';
               }
+              // the always-works public view: the Page's Ad Library listing
+              byId[id].pageId = (madsConf && madsConf.pageId) || '';
               next();
             });
           });

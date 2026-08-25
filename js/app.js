@@ -45,7 +45,8 @@ Ads.registerView = function (id, def) { Ads.views[id] = def; };
     archive: ico('<rect x="3" y="4" width="18" height="5"/><path d="M5 9v11h14V9"/><line x1="10" y1="13" x2="14" y2="13"/>'),
     rocket: ico('<path d="M5 15c-1 1-1.5 4-1.5 4s3-.5 4-1.5"/><path d="M14 4c4 0 6 2 6 6 0 4-5 9-9 11l-4-4C9 13 14 8 14 4z"/><circle cx="14.5" cy="9.5" r="1.6"/>'),
     ext: ico('<path d="M14 4h6v6"/><line x1="20" y1="4" x2="11" y2="13"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>'),
-    info: ico('<circle cx="12" cy="12" r="9"/><line x1="12" y1="11" x2="12" y2="16"/><circle cx="12" cy="7.6" r="0.6" fill="currentColor"/>')
+    info: ico('<circle cx="12" cy="12" r="9"/><line x1="12" y1="11" x2="12" y2="16"/><circle cx="12" cy="7.6" r="0.6" fill="currentColor"/>'),
+    instagram: ico('<rect x="3.5" y="3.5" width="17" height="17" rx="4.5"/><circle cx="12" cy="12" r="4"/><circle cx="17" cy="7" r="1.1" fill="currentColor" stroke="none"/>')
   };
   Ads.icons = icons;
 
@@ -69,14 +70,10 @@ Ads.registerView = function (id, def) { Ads.views[id] = def; };
       { id: 'brand', label: 'Brand Kit', icon: icons.brand }
     ] },
     { id: 'performance', label: 'Ad Performance', short: 'Performance', sub: 'Track + optimize', icon: icons.performance, views: [
-      { id: 'dashboard', label: 'Dashboard', icon: icons.dashboard },
-      { id: 'rounds', label: 'Campaign Rounds', icon: icons.archive },
-      { id: 'instagram', label: 'Instagram', icon: icons.rocket },
       { id: 'tracking', label: 'Live Tracking', icon: icons.globe },
-      { id: 'ads', label: 'All Ads', icon: icons.ads },
-      { id: 'compare', label: 'Compare', icon: icons.compare },
-      { id: 'import', label: 'Import Data', icon: icons.importd },
-      { id: 'settings', label: 'Targets', icon: icons.settings }
+      { id: 'rounds', label: 'Campaign Rounds', icon: icons.archive },
+      { id: 'instagram', label: 'Instagram', icon: icons.instagram },
+      { id: 'import', label: 'Import Data', icon: icons.importd }
     ] }
   ];
   var VIEW_MODE = {};
