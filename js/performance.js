@@ -368,34 +368,12 @@ window.Ads = window.Ads || {};
   }
   // adKey → approved ad record (for a thumbnail + a link to the full ad detail)
   function adsByKey() { var m = {}; store.allAds().forEach(function (a) { if (a.adKey) m[a.adKey] = a; }); return m; }
-  // the Page id behind dark ads — needed for the (always-public) Ad Library
-  // link. Synchronous with async self-population: first render kicks off one
-  // status fetch, then re-renders once it lands.
-  var madsPageIdCache = null, madsPageIdFetching = false;
-  function darkPageId() {
-    if (madsPageIdCache) return madsPageIdCache;
-    var dk = (store.getTracking().dark || {}).byId || {};
-    Object.keys(dk).some(function (id) {
-      if (dk[id] && dk[id].pageId) { madsPageIdCache = dk[id].pageId; return true; }
-      return false;
-    });
-    if (madsPageIdCache) return madsPageIdCache;
-    if (!madsPageIdFetching) {
-      madsPageIdFetching = true;
-      ai().madsStatus().then(function (st) {
-        if (st && st.conf && st.conf.pageId) {
-          madsPageIdCache = st.conf.pageId;
-          if (roundsOpenProject) Ads.go('rounds');   // links appear without a manual sync
-        }
-      }).catch(function () {});
-    }
-    return '';
-  }
-  // adKey → a link that ACTUALLY opens in any browser: organic posts use their
-  // public permalink; dark ads use the Ad Library listing (dark-post
-  // permalinks only render inside the Instagram app — never link them here)
+  // adKey → the ad's real Instagram post URL: organic posts carry it directly,
+  // dark ads get it from the synced insights. These pages render for the
+  // account owner's logged-in session (and the IG app) — the user's preference.
   function igLinksByAdKey() {
     var map = {};   // adKey → { url, lbl }
+    var dk = (store.getTracking().dark || {}).byId || {};
     store.listProjects().forEach(function (p) {
       (p.rounds || []).forEach(function (r) {
         Object.keys(r.igPosts || {}).forEach(function (k) {
@@ -406,7 +384,7 @@ window.Ads = window.Ads || {};
           Object.keys(d.ads || {}).forEach(function (k) {
             var a = d.ads[k];
             if (map[k] || !a || !a.adId) return;
-            if (darkPageId()) map[k] = { url: 'https://www.facebook.com/ads/library/?active_status=all&ad_type=all&country=ALL&view_all_page_id=' + darkPageId(), lbl: 'in Ad Library ↗' };
+            if (dk[a.adId] && dk[a.adId].permalink) map[k] = { url: dk[a.adId].permalink, lbl: 'on Instagram ↗' };
           });
         });
       });
@@ -1050,9 +1028,8 @@ window.Ads = window.Ads || {};
             if (dkm.likes != null) dbits.push('♥ ' + dkm.likes);
             if (dkm.comments != null) dbits.push('💬 ' + dkm.comments);
           }
-          var adLib = darkPageId() ? 'https://www.facebook.com/ads/library/?active_status=all&ad_type=all&country=ALL&view_all_page_id=' + esc(darkPageId()) : '';
           igLine += '<div class="rndp-ig">🌑 ' +
-            (adLib ? '<a href="' + adLib + '" target="_blank" rel="noopener" title="public listing of your running ads — works in any browser, no login">dark ad — see it in Ad Library</a> ' : 'dark ad ') +
+            (dkm && dkm.permalink ? '<a href="' + esc(dkm.permalink) + '" target="_blank" rel="noopener" title="opens the ad’s real Instagram post — view while logged in as the account owner">dark ad on Instagram</a> ' : 'dark ad ') +
             (dbits.length ? '· ' + dbits.join(' · ') : '· created paused — stats after next sync') + '</div>';
         }
         return '<div class="rndp-card">' +
