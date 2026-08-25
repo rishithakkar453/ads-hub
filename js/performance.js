@@ -376,14 +376,16 @@ window.Ads = window.Ads || {};
     var dk = (store.getTracking().dark || {}).byId || {};
     store.listProjects().forEach(function (p) {
       (p.rounds || []).forEach(function (r) {
-        Object.keys(r.igPosts || {}).forEach(function (k) {
-          if (r.igPosts[k] && r.igPosts[k].permalink) map[k] = { url: r.igPosts[k].permalink, lbl: 'on Instagram ↗' };
-        });
-        // ONLY the live run — archived campaigns' post pages are dead
+        // the DARK link is the one that matters — and ONLY from the live run
+        // (archived campaigns' post pages are dead)
         if (r.dark) Object.keys(r.dark.ads || {}).forEach(function (k) {
           var a = r.dark.ads[k];
           if (map[k] || !a || !a.adId) return;
-          if (dk[a.adId] && dk[a.adId].permalink) map[k] = { url: dk[a.adId].permalink, lbl: 'on Instagram ↗' };
+          if (dk[a.adId] && dk[a.adId].permalink) map[k] = { url: dk[a.adId].permalink, lbl: 'dark ad on Instagram ↗' };
+        });
+        // organic posts as fallback only, for ads with no dark run
+        Object.keys(r.igPosts || {}).forEach(function (k) {
+          if (!map[k] && r.igPosts[k] && r.igPosts[k].permalink) map[k] = { url: r.igPosts[k].permalink, lbl: 'on Instagram ↗' };
         });
       });
     });
@@ -990,22 +992,7 @@ window.Ads = window.Ads || {};
         var sp = spend[k] != null ? util.num(spend[k]) : null;
         if (sp != null) { tot.spend += sp; tot.spendSet = true; }
         var outRate = st.views ? Math.round((st.outs || 0) / st.views * 100) : null;
-        var ig = (r.igPosts || {})[k];
-        var igm = ig && ig.id ? (t.ig && t.ig.byId && t.ig.byId[ig.id]) : null;
-        var igLine = '';
-        if (ig) {
-          var bits = [];
-          if (igm && !igm.error) {
-            if (igm.views != null) bits.push(igm.views + ' views');
-            if (igm.reach != null) bits.push(igm.reach + ' reach');
-            if (igm.likes != null) bits.push('♥ ' + igm.likes);
-            if (igm.comments != null) bits.push('💬 ' + igm.comments);
-            if (igm.saved != null) bits.push('🔖 ' + igm.saved);
-          }
-          igLine = '<div class="rndp-ig">📸 ' +
-            (ig.permalink ? '<a href="' + esc(ig.permalink) + '" target="_blank" rel="noopener">on Instagram</a>' : 'posted') +
-            (bits.length ? ' · ' + bits.join(' · ') : ' · stats arrive on next sync') + '</div>';
-        }
+        var igLine = '';   // (organic 📸 line removed by request — dark ads are the workflow)
         var dk = (r.dark && r.dark.ads || {})[k];
         var dkCurrent = !!(dk && dk.adId);   // links only ever come from the LIVE run — archived campaigns' posts are dead pages
         if (!dkCurrent) {
