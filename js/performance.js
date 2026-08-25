@@ -1636,9 +1636,9 @@ window.Ads = window.Ads || {};
     var tAgeMin = (savedT && savedT.ageMin) || 25;
     var tAgeMax = (savedT && savedT.ageMax) || 65;
     var tGender = (savedT && savedT.gender) || 'all';
-    // equal split is the default — the user wants every creative to get the
-    // same audition; Meta-optimized stays available as an explicit choice
-    var tSplit = savedT && savedT.split === 'auto' ? 'auto' : 'equal';
+    // Meta-optimized is the default (user's choice) — equal split is opted
+    // into per round, and the pick is remembered with the round's targeting
+    var tSplit = savedT && savedT.split === 'equal' ? 'equal' : 'auto';
     var rows = items.map(function (it) {
       return '<div class="igpost-row">' +
         '<div class="igpost-row-thumb cr-stage-scaler" data-dkt="' + esc(it.key) + '"></div>' +
@@ -1680,8 +1680,8 @@ window.Ads = window.Ads || {};
             ['all', 'women', 'men'].map(function (g) { return '<option value="' + g + '"' + (g === tGender ? ' selected' : '') + '>' + (g === 'all' ? 'Everyone' : g.charAt(0).toUpperCase() + g.slice(1)) + '</option>'; }).join('') +
           '</select></div>' +
           '<div class="field" style="max-width:17rem;margin:0"><label>Budget split</label><select class="select" id="dk-split">' +
-            '<option value="equal"' + (tSplit === 'equal' ? ' selected' : '') + '>⚖ Equal per ad (fair test)</option>' +
             '<option value="auto"' + (tSplit === 'auto' ? ' selected' : '') + '>🎯 Meta optimizes (winners take more)</option>' +
+            '<option value="equal"' + (tSplit === 'equal' ? ' selected' : '') + '>⚖ Equal per ad (fair test)</option>' +
           '</select></div>' +
           '<label class="pp-chip" style="align-self:flex-end"><input type="checkbox" id="dk-fb"' + (savedT && savedT.includeFb ? ' checked' : '') + '><span>also Facebook feed</span></label>' +
         '</div>' +
