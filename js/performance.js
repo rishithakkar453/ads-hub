@@ -1636,6 +1636,9 @@ window.Ads = window.Ads || {};
     var tAgeMin = (savedT && savedT.ageMin) || 25;
     var tAgeMax = (savedT && savedT.ageMax) || 65;
     var tGender = (savedT && savedT.gender) || 'all';
+    // equal split is the default — the user wants every creative to get the
+    // same audition; Meta-optimized stays available as an explicit choice
+    var tSplit = savedT && savedT.split === 'auto' ? 'auto' : 'equal';
     var rows = items.map(function (it) {
       return '<div class="igpost-row">' +
         '<div class="igpost-row-thumb cr-stage-scaler" data-dkt="' + esc(it.key) + '"></div>' +
@@ -1650,6 +1653,7 @@ window.Ads = window.Ads || {};
       updateRound(pid, rid, { darkTargeting: {
         budget: m.querySelector('#dk-budget').value.trim(),
         days: m.querySelector('#dk-days').value.trim(),
+        split: m.querySelector('#dk-split').value,
         countries: m.querySelector('#dk-countries').value,
         ageMin: m.querySelector('#dk-agemin').value,
         ageMax: m.querySelector('#dk-agemax').value,
@@ -1674,6 +1678,10 @@ window.Ads = window.Ads || {};
           '<div class="field" style="max-width:8rem;margin:0"><label>Age max</label><input class="input" id="dk-agemax" inputmode="numeric" value="' + esc(tAgeMax) + '"></div>' +
           '<div class="field" style="max-width:11rem;margin:0"><label>Gender</label><select class="select" id="dk-gender">' +
             ['all', 'women', 'men'].map(function (g) { return '<option value="' + g + '"' + (g === tGender ? ' selected' : '') + '>' + (g === 'all' ? 'Everyone' : g.charAt(0).toUpperCase() + g.slice(1)) + '</option>'; }).join('') +
+          '</select></div>' +
+          '<div class="field" style="max-width:17rem;margin:0"><label>Budget split</label><select class="select" id="dk-split">' +
+            '<option value="equal"' + (tSplit === 'equal' ? ' selected' : '') + '>⚖ Equal per ad (fair test)</option>' +
+            '<option value="auto"' + (tSplit === 'auto' ? ' selected' : '') + '>🎯 Meta optimizes (winners take more)</option>' +
           '</select></div>' +
           '<label class="pp-chip" style="align-self:flex-end"><input type="checkbox" id="dk-fb"' + (savedT && savedT.includeFb ? ' checked' : '') + '><span>also Facebook feed</span></label>' +
         '</div>' +
@@ -1704,9 +1712,9 @@ window.Ads = window.Ads || {};
           var g = m.querySelector('[data-mact="go"]');
           if (g && !g.disabled) g.textContent = 'Create ' + items.length + ' dark ad' + (items.length === 1 ? '' : 's') + ' (paused)';
         }
-        ['dk-budget', 'dk-days', 'dk-countries', 'dk-agemin', 'dk-agemax', 'dk-fb', 'dk-gender'].forEach(function (id) {
+        ['dk-budget', 'dk-days', 'dk-countries', 'dk-agemin', 'dk-agemax', 'dk-fb', 'dk-gender', 'dk-split'].forEach(function (id) {
           var n = m.querySelector('#' + id); if (!n) return;
-          n.addEventListener(id === 'dk-fb' || id === 'dk-gender' ? 'change' : 'input', disarm);
+          n.addEventListener(id === 'dk-fb' || id === 'dk-gender' || id === 'dk-split' ? 'change' : 'input', disarm);
         });
         // live plain-money breakdown: total ÷ days ÷ ads, plus the hard end date
         function updateExplain() {
@@ -1716,15 +1724,28 @@ window.Ads = window.Ads || {};
           var d = Math.min(90, Math.max(1, parseInt(m.querySelector('#dk-days').value, 10) || 0));
           if (!(tot > 0) || !d) { ex.textContent = 'Set a TOTAL budget and how many days it runs — the campaign stops automatically and can never spend more than the total.'; return; }
           var endD = new Date(Date.now() + d * 86400 * 1000);
-          var perDay = tot / d, perAd = tot / items.length;
-          ex.innerHTML = '<strong>' + tot + ' ' + esc(cur) + ' total over ' + d + ' day' + (d === 1 ? '' : 's') + '</strong> — about ' +
-            (Math.round(perDay * 100) / 100) + ' ' + esc(cur) + '/day shared by ' + items.length + ' ad' + (items.length === 1 ? '' : 's') +
-            ' ≈ ' + (Math.round(perAd * 100) / 100) + ' ' + esc(cur) + ' per ad overall if they perform equally (Meta gives more to whichever performs better). ' +
-            'Ends automatically on <strong>' + endD.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + '</strong> — total spend can never exceed ' + tot + ' ' + esc(cur) + '.';
+          var endStr = endD.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+          var perAd = tot / items.length;
+          if (m.querySelector('#dk-split').value === 'equal') {
+            var perAdR = Math.round(perAd * 100) / 100;
+            // Meta's floor ≈ 1/day per ad set (≈100/day for zero-decimal currencies)
+            var minPer = d * (/^(CLP|COP|CRC|HUF|ISK|IDR|JPY|KRW|PYG|TWD|VND)$/.test(cur.toUpperCase()) ? 100 : 1);
+            ex.innerHTML = '<strong>' + tot + ' ' + esc(cur) + ' split equally:</strong> each of the ' + items.length + ' ads gets its own hard budget of ≈ ' +
+              perAdR + ' ' + esc(cur) + ' that the others can never eat into — every creative gets the same audition. ' +
+              'Ends automatically on <strong>' + endStr + '</strong> — total spend can never exceed ' + tot + ' ' + esc(cur) + '.' +
+              (perAd < minPer ? ' <span style="color:var(--bad,#e5704f)">⚠ Below Meta’s ≈' + minPer + ' ' + esc(cur) + ' minimum per ad for ' + d + ' day' + (d === 1 ? '' : 's') + ' — add budget, shorten the days, or run fewer ads.</span>' : '');
+          } else {
+            var perDay = tot / d;
+            ex.innerHTML = '<strong>' + tot + ' ' + esc(cur) + ' total over ' + d + ' day' + (d === 1 ? '' : 's') + '</strong> — about ' +
+              (Math.round(perDay * 100) / 100) + ' ' + esc(cur) + '/day shared by ' + items.length + ' ad' + (items.length === 1 ? '' : 's') +
+              ' ≈ ' + (Math.round(perAd * 100) / 100) + ' ' + esc(cur) + ' per ad overall if they perform equally — but Meta will concentrate the money on whichever ads win early, so the spread WILL be uneven. ' +
+              'Ends automatically on <strong>' + endStr + '</strong> — total spend can never exceed ' + tot + ' ' + esc(cur) + '.';
+          }
         }
         updateExplain();
         m.querySelector('#dk-budget').addEventListener('input', updateExplain);
         m.querySelector('#dk-days').addEventListener('input', updateExplain);
+        m.querySelector('#dk-split').addEventListener('change', updateExplain);
         // ---- interest chips + AI optimize ----
         m.__ints = [];
         var intBox = m.querySelector('#dk-ints');
@@ -1806,11 +1827,19 @@ window.Ads = window.Ads || {};
         if (!dkDays) return Ads.toast('Set how many days the round runs', true);
         var countries = m.querySelector('#dk-countries').value.split(',').map(function (c) { return c.trim().toUpperCase(); }).filter(function (c) { return /^[A-Z]{2}$/.test(c); });
         if (!countries.length) return Ads.toast('Give at least one 2-letter country code (e.g. CA, US)', true);
+        var dkSplit = m.querySelector('#dk-split').value === 'equal';
+        // client-side mirror of the server's per-ad-set minimum: ~1/day each,
+        // which is ~100/day in zero-decimal currencies (JPY, KRW, TWD, …)
+        var curU = String(conf.currency || 'USD').toUpperCase();
+        var perDayMin = /^(CLP|COP|CRC|HUF|ISK|IDR|JPY|KRW|PYG|TWD|VND)$/.test(curU) ? 100 : 1;
+        if (dkSplit && budget / items.length < dkDays * perDayMin) {
+          return Ads.toast('Equal split gives each ad under ' + perDayMin + ' ' + curU + '/day — add budget, shorten the days, or run fewer ads', true);
+        }
         var goBtn = m.querySelector('[data-mact="go"]');
         if (!m.__dkArmed) {
           m.__dkArmed = true;
           var endStr = new Date(Date.now() + dkDays * 86400 * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-          if (goBtn) goBtn.textContent = '⚠ PAUSED campaign: ' + items.length + ' ad' + (items.length === 1 ? '' : 's') + ' · ' + budget + ' ' + (conf.currency || 'USD') + ' TOTAL · ' + dkDays + ' day' + (dkDays === 1 ? '' : 's') + ' (ends ' + endStr + ') — press again to confirm';
+          if (goBtn) goBtn.textContent = '⚠ PAUSED campaign: ' + items.length + ' ad' + (items.length === 1 ? '' : 's') + ' · ' + budget + ' ' + (conf.currency || 'USD') + ' TOTAL · ' + (dkSplit ? '⚖ equal split' : '🎯 Meta-optimized') + ' · ' + dkDays + ' day' + (dkDays === 1 ? '' : 's') + ' (ends ' + endStr + ') — press again to confirm';
           return;
         }
         if (goBtn) { goBtn.disabled = true; goBtn.innerHTML = '<span class="spinner"></span> Working…'; }
@@ -1855,6 +1884,7 @@ window.Ads = window.Ads || {};
           var genderSel = m.querySelector('#dk-gender').value;
           ai().madsDark({
             roundId: rid, roundName: r.name, budget: budget, days: dkDays, countries: countries,
+            split: m.querySelector('#dk-split').value === 'equal',
             ageMin: m.querySelector('#dk-agemin').value, ageMax: m.querySelector('#dk-agemax').value,
             includeFb: m.querySelector('#dk-fb').checked,
             genders: genderSel === 'women' ? [2] : genderSel === 'men' ? [1] : [],
@@ -1875,7 +1905,7 @@ window.Ads = window.Ads || {};
               var runs = (rF.darkRuns || []).slice();
               if (rF.dark && rF.dark.campaignId && rF.dark.campaignId !== result.campaignId) runs.push(rF.dark);
               updateRound(pid, rid, {
-                dark: { campaignId: result.campaignId, adsetId: result.adsetId, budget: budget, days: dkDays, currency: conf.currency || 'USD', at: util.nowISO(), ads: result.ads },
+                dark: { campaignId: result.campaignId, adsetId: result.adsetId, split: !!result.split, budget: budget, days: dkDays, currency: conf.currency || 'USD', at: util.nowISO(), ads: result.ads },
                 darkRuns: runs
               });
               var actNum = String(conf.adAccountId || '').replace(/^act_/, '');
@@ -1986,10 +2016,15 @@ window.Ads = window.Ads || {};
           var endMs = d ? Math.max(Date.now(), curEndMs) + d * 86400 * 1000 : curEndMs;
           var endStr = new Date(endMs).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
           var perAd = c.keepKeys.length ? Math.round(newTotal / c.keepKeys.length * 100) / 100 : 0;
+          var addPer = c.keepKeys.length ? Math.round(add / c.keepKeys.length * 100) / 100 : 0;
           ex.innerHTML = (c.pauseN ? '<strong>Pauses ' + c.pauseN + ' ad' + (c.pauseN === 1 ? '' : 's') + '</strong>, keeps ' : 'Keeps ') + c.keepKeys.length + ' running. ' +
             (add > 0 ? 'Adds <strong>' + add + ' ' + esc(cur) + '</strong> → hard cap ≈ ' + newTotal + ' ' + esc(cur) + ' total (including what already ran)' : 'No extra money') +
             (d ? ', runs until <strong>' + endStr + '</strong>. ' : '. ') +
-            (add > 0 && c.keepKeys.length ? 'Meta splits the remaining money across the ' + c.keepKeys.length + ' kept ad' + (c.keepKeys.length === 1 ? '' : 's') + ' (≈ ' + perAd + ' ' + esc(cur) + ' each if equal — better performers get more).' : '');
+            (add > 0 && c.keepKeys.length
+              ? (run.split
+                  ? 'Each kept ad has its OWN budget — this adds ' + addPer + ' ' + esc(cur) + ' to every one of them, so the split stays even.'
+                  : 'Meta splits the remaining money across the ' + c.keepKeys.length + ' kept ad' + (c.keepKeys.length === 1 ? '' : 's') + ' (≈ ' + perAd + ' ' + esc(cur) + ' each if equal — better performers get more).')
+              : '');
         }
         boxes().forEach(function (b) {
           b.addEventListener('change', function () {
@@ -2046,15 +2081,25 @@ window.Ads = window.Ads || {};
             var dark2 = JSON.parse(JSON.stringify(rF.dark || run));
             (result.paused || []).forEach(function (k6) { if (dark2.ads[k6]) dark2.ads[k6].paused = true; });
             if (result.newBudget != null) dark2.budget = result.newBudget;
+            else if (dark2.lastScaleIdem !== m.__sclIdem) {
+              // split runs: track the overall total client-side, counting only
+              // money the server says actually LANDED — and never twice for
+              // the same confirmed intent (idem)
+              var addDone = result.addedTotal != null ? result.addedTotal : add;
+              if (addDone > 0) dark2.budget = Math.round(((parseFloat(dark2.budget) || 0) + addDone) * 100) / 100;
+            }
+            dark2.lastScaleIdem = m.__sclIdem;
             if (result.endTime) dark2.endTime = result.endTime;
             dark2.scaledAt = util.nowISO();
             updateRound(pid, rid, { dark: dark2 });
             var actNum = String(conf.adAccountId || '').replace(/^act_/, '');
             var endStr2 = result.endTime ? new Date(result.endTime).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
-            var errN = Object.keys(result.pauseErrors || {}).length;
-            if (status) status.innerHTML = '✓ ' + (result.paused || []).length + ' paused · ' + result.kept + ' kept · hard cap ' + result.newBudget + ' ' + esc(cur) +
+            var errN = Object.keys(result.pauseErrors || {}).length + Object.keys(result.updateErrors || {}).length;
+            var capBit = result.newBudget != null ? ' · hard cap ' + result.newBudget + ' ' + esc(cur)
+              : result.addedTotal ? ' · +' + result.addedTotal + ' ' + esc(cur) + ' added across the kept ads’ own budgets' : '';
+            if (status) status.innerHTML = '✓ ' + (result.paused || []).length + ' paused · ' + result.kept + ' kept' + capBit +
               (endStr2 ? ' · runs until ' + endStr2 : '') +
-              (errN ? ' · <span style="color:var(--bad,#e5704f)">' + errN + ' pause' + (errN === 1 ? '' : 's') + ' failed — finish in <a href="https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=' + esc(actNum) + '" target="_blank" rel="noopener">Ads Manager</a></span>' : '') +
+              (errN ? ' · <span style="color:var(--bad,#e5704f)">' + errN + ' change' + (errN === 1 ? '' : 's') + ' failed — finish in <a href="https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=' + esc(actNum) + '" target="_blank" rel="noopener">Ads Manager</a></span>' : '') +
               ((result.keptButPaused || []).length ? ' · note: ' + result.keptButPaused.length + ' kept ad' + (result.keptButPaused.length === 1 ? ' is' : 's are') + ' still paused from before — switch them on in <a href="https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=' + esc(actNum) + '" target="_blank" rel="noopener">Ads Manager</a> if you want them back' : '');
             if (goBtn) { goBtn.textContent = 'Done'; goBtn.disabled = false; goBtn.setAttribute('data-mact', 'cancel'); }
             Ads.toast('Round scaled — same ads, more money behind the winners');

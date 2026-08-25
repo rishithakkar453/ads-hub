@@ -1308,19 +1308,35 @@ function madsVerify(cb) {
   });
 }
 
-// The dark-ads chain for one round: campaign → ad set (budget + targeting,
-// Instagram placements) → per ad: media upload → creative → ad. EVERYTHING is
-// created with status PAUSED — this code can never start spending money.
+// The dark-ads chain for one round: campaign → ad set(s) → per ad: media
+// upload → creative → ad. Two budget structures: SHARED (one ad set, Meta's
+// optimizer decides which ads spend — winners take most) or EQUAL SPLIT (one
+// ad set per ad, each with its own hard slice of the total — the only shape
+// Meta cannot rebalance, so every creative gets the same audition).
+// EVERYTHING is created with status PAUSED — this code can never start
+// spending money.
 function madsDarkRun(jobId, input) {
   var tok = effectiveMadsToken();
   var job = igJobs[jobId];
   var rid = String(input.roundId || '');
-  var out = { campaignId: '', adsetId: '', ads: {} };
+  var split = !!input.split;
+  var out = { campaignId: '', adsetId: '', split: split, ads: {} };
   // the partial result rides on the job even when the chain fails — a created
   // campaign must never become invisible; the ledger also records it durably
   function ledger(state) {
     if (!rid) return;
-    madsRuns[rid] = { campaignId: out.campaignId, adsetId: out.adsetId, ads: out.ads, at: Date.now(), state: state };
+    var prev = madsRuns[rid];
+    madsRuns[rid] = {
+      campaignId: out.campaignId, adsetId: out.adsetId, split: split,
+      // the plan this run was built for — a resume must match it exactly or
+      // the sum of ad-set budgets stops equaling what the user entered
+      budgetMinor: totalMinor, adKeys: ads.map(function (a) { return a.adKey; }),
+      ads: out.ads,
+      // a scale's paid-record survives resumes of the SAME campaign only —
+      // a fresh campaign must never inherit another campaign's idem ledger
+      lastScale: (prev && prev.campaignId === out.campaignId) ? prev.lastScale : undefined,
+      at: Date.now(), state: state
+    };
     saveMadsRuns();
   }
   function fail(e) {
@@ -1338,6 +1354,19 @@ function madsDarkRun(jobId, input) {
   if (!(totalMinor > 0)) return fail(new Error('bad budget'));
   var act = '/' + madsConf.adAccountId;
   var ads = input.ads || [];
+  // equal split: every ad's slice, remainder cents ride on the first ad.
+  // Meta refuses ad sets below ≈1.00/day (¥100/day for offset-1 currencies)
+  var perMinor = 0;
+  if (split) {
+    if (!ads.length) return fail(new Error('no ads'));
+    perMinor = Math.floor(totalMinor / ads.length);
+    var minPer = days * 100;
+    if (perMinor < minPer) return fail(new Error('An equal split gives each ad only ' + (perMinor / mult) + ' ' + (madsConf.currency || '') + ' for ' + days + ' day' + (days === 1 ? '' : 's') + ' — Meta needs about ' + (minPer / mult) + ' per ad. Add budget, shorten the days, or run fewer ads.'));
+  }
+  // remainder cents ride on the FIRST adKey in sorted order — stable across
+  // retries even if the client sends the ads in a different order
+  var remKey = split ? ads.map(function (a) { return a.adKey; }).sort()[0] : '';
+  function budgetFor(ad) { return perMinor + (ad.adKey === remKey ? totalMinor - perMinor * ads.length : 0); }
   // a failed earlier attempt may have left a usable paused campaign/adset —
   // reuse them instead of manufacturing lookalike orphans. "Failed" includes
   // runs that finished but with per-ad errors (e.g. the dev-mode creative
@@ -1346,6 +1375,22 @@ function madsDarkRun(jobId, input) {
   var rec = rid ? freshMadsRuns()[rid] : null;
   var recHasFailures = !!(rec && rec.ads && Object.keys(rec.ads).some(function (k) { return !(rec.ads[k] && rec.ads[k].adId); }));
   var reuse = (rec && rec.campaignId && (rec.state === 'error' || recHasFailures)) ? rec : null;
+  // resuming with DIFFERENT settings than the failed attempt would mix two
+  // plans in one campaign (ad-set budgets stop summing to the entered total,
+  // or shared/split objects get twinned) — refuse loudly instead. The clean
+  // way out is archiving the old campaign in Ads Manager: the ledger entry
+  // clears itself and the next run builds fresh.
+  if (reuse) {
+    if (!!reuse.split !== split) {
+      return fail(new Error('A previous attempt for this round was created with the OTHER budget-split setting. Retry with the same setting — or archive that campaign in Ads Manager, then run again clean.'));
+    }
+    if (split && reuse.budgetMinor != null && reuse.budgetMinor !== totalMinor) {
+      return fail(new Error('The failed attempt was built for ' + (reuse.budgetMinor / mult) + ' ' + (madsConf.currency || '') + ' total — retry with that same total (money can be changed afterwards with Scale up), or archive the campaign in Ads Manager first.'));
+    }
+    if (split && reuse.adKeys && reuse.adKeys.slice().sort().join(',') !== ads.map(function (a) { return a.adKey; }).sort().join(',')) {
+      return fail(new Error('The ads in this round changed since the failed attempt — archive its campaign in Ads Manager first, then run again clean.'));
+    }
+  }
   function withCampaign(cb2) {
     function proceed() {
       if (reuse && reuse.campaignId) { out.campaignId = reuse.campaignId; note('reusing the campaign from the failed attempt…'); return cb2(); }
@@ -1402,98 +1447,20 @@ function madsDarkRun(jobId, input) {
     var ints = (Array.isArray(input.interests) ? input.interests : []).filter(function (x) { return x && x.id && x.name; })
       .map(function (x) { return { id: String(x.id), name: String(x.name).slice(0, 80) }; }).slice(0, 25);
     if (ints.length) targeting.interests = ints;
-    function runAds() {
-      var i = 0;
-      (function nextAd() {
-        if (i >= ads.length) {
-          if (job) { job.state = 'done'; job.result = out; }
-          ledger('done');
-          return;
-        }
-        var ad = ads[i++];
-        // already created by the failed attempt we're resuming — never remake it
-        if (out.ads[ad.adKey] && out.ads[ad.adKey].adId) return nextAd();
-        note('ad ' + i + '/' + ads.length + ': uploading media…');
-        function makeCreative(storySpec) {
-          note('ad ' + i + '/' + ads.length + ': creating creative…');
-          fbRequest('POST', act + '/adcreatives', {
-            name: 'Ads Hub — ' + (ad.name || ad.adKey),
-            object_story_spec: storySpec,
-            url_tags: 'utm_source=ig&utm_campaign=adshub&utm_content=' + encodeURIComponent(ad.adKey),
-            access_token: tok
-          }, function (crerr, crj) {
-            if (crerr) { out.ads[ad.adKey] = { error: crerr.message.slice(0, 200) }; return nextAd(); }
-            note('ad ' + i + '/' + ads.length + ': creating ad (PAUSED)…');
-            fbRequest('POST', act + '/ads', {
-              name: (ad.name || 'Ad') + ' [' + ad.adKey + ']',
-              adset_id: out.adsetId, creative: { creative_id: crj.id }, status: 'PAUSED', access_token: tok
-            }, function (aderr, adj) {
-              if (aderr) out.ads[ad.adKey] = { error: aderr.message.slice(0, 200) };
-              else out.ads[ad.adKey] = { adId: adj.id, creativeId: crj.id };
-              nextAd();
-            });
-          });
-        }
-        function withImageHash(b64, cb2) {
-          fbRequest('POST', act + '/adimages', { bytes: b64, access_token: tok }, function (ierr, ij) {
-            if (ierr) return cb2(ierr);
-            var imgs = ij.images || {};
-            var first = imgs.bytes || imgs[Object.keys(imgs)[0]];
-            if (!first || !first.hash) return cb2(new Error('Meta returned no image hash'));
-            cb2(null, first.hash);
-          });
-        }
-        if (ad.kind === 'video' && ad.videoUrl) {
-          fbRequest('POST', act + '/advideos', { file_url: PUBLIC_BASE + ad.videoUrl, access_token: tok }, function (verr, vj) {
-            if (verr) { out.ads[ad.adKey] = { error: verr.message.slice(0, 200) }; return nextAd(); }
-            var videoId = vj.id, vtries = 0;
-            (function pollVideo() {
-              fbRequest('GET', '/' + videoId, { fields: 'status', access_token: tok }, function (perr2, pj2) {
-                var st = pj2 && pj2.status && pj2.status.video_status;
-                if (!perr2 && st === 'ready') {
-                  return withImageHash(ad.thumbB64, function (therr, thash) {
-                    if (therr) { out.ads[ad.adKey] = { error: therr.message.slice(0, 200) }; return nextAd(); }
-                    makeCreative({
-                      page_id: madsConf.pageId,
-                      instagram_user_id: madsConf.igUserId || undefined,
-                      video_data: { video_id: videoId, image_hash: thash, message: ad.caption || '', call_to_action: { type: 'LEARN_MORE', value: { link: ad.link } } }
-                    });
-                  });
-                }
-                if (!perr2 && st === 'error') { out.ads[ad.adKey] = { error: 'Meta could not process the video' }; return nextAd(); }
-                if (++vtries > 36) { out.ads[ad.adKey] = { error: 'video processing timed out' }; return nextAd(); }
-                note('ad ' + i + '/' + ads.length + ': video processing…');
-                setTimeout(pollVideo, 5000);
-              });
-            })();
-          }, 300000);
-        } else {
-          withImageHash(ad.imageB64, function (ierr, hash) {
-            if (ierr) { out.ads[ad.adKey] = { error: ierr.message.slice(0, 200) }; return nextAd(); }
-            makeCreative({
-              page_id: madsConf.pageId,
-              instagram_user_id: madsConf.igUserId || undefined,
-              link_data: { link: ad.link, message: ad.caption || '', image_hash: hash, call_to_action: { type: 'LEARN_MORE', value: { link: ad.link } } }
-            });
-          });
-        }
-      })();
-    }
-    if (reuse && reuse.adsetId) {
-      out.adsetId = reuse.adsetId;
-      Object.keys(reuse.ads || {}).forEach(function (k) { if (reuse.ads[k] && reuse.ads[k].adId) out.ads[k] = reuse.ads[k]; });
-      note('resuming the failed attempt — reusing its paused campaign and ad set…');
-      return runAds();
-    }
+    // the working targeting: when Meta rejects a placement combo / retired
+    // interest once, the healed version is remembered so the other 29 ad
+    // sets of a split run don't re-learn the same lesson
+    var tgCurrent = targeting;
     // Meta retires interest ids constantly (their own search can return ones
-    // already deprecated) — when the ad set is rejected for that, strip the
-    // named ids and retry instead of surfacing an unfixable error.
-    function createAdset(tg, attempt) {
-      note(attempt ? 'creating ad set (retry without deprecated interests)…' : 'creating ad set…');
+    // already deprecated) — when an ad set is rejected for that, strip the
+    // named ids and retry instead of surfacing an unfixable error. Same for
+    // placement-combo rejections. Transient rate limits back off once.
+    function createAdsetNamed(name, budgetMinor, tg, attempt, rlTried, done) {
+      note(attempt ? 'creating ad set (retry after Meta rejection)…' : 'creating ad set…');
       fbRequest('POST', act + '/adsets', {
-        name: 'Ads Hub — ' + (input.roundName || 'round'),
+        name: name,
         campaign_id: out.campaignId,
-        lifetime_budget: totalMinor,
+        lifetime_budget: budgetMinor,
         start_time: new Date().toISOString(),
         end_time: new Date(Date.now() + days * 86400 * 1000).toISOString(),
         billing_event: 'IMPRESSIONS', optimization_goal: 'LINK_CLICKS',
@@ -1501,6 +1468,11 @@ function madsDarkRun(jobId, input) {
         targeting: tg, status: 'PAUSED', access_token: tok
       }, function (serr, sj) {
         if (serr) {
+          var code = serr.fb && serr.fb.code;
+          if (!rlTried && (code === 17 || code === 613 || code === 80004 || code === 4 || code === 32)) {
+            note('Meta rate limit — waiting 30s…');
+            return setTimeout(function () { createAdsetNamed(name, budgetMinor, tg, attempt, true, done); }, 30000);
+          }
           var raw = JSON.stringify(serr.fb || {}) + ' ' + serr.message;
           // placement-combo rejections: strip any position Meta names, else
           // fall back to the always-valid feed/story/reels trio
@@ -1512,7 +1484,7 @@ function madsDarkRun(jobId, input) {
               note('Meta rejected the placement combo — retrying with ' + keptPos.length + ' Instagram placements…');
               var tgP = {}; Object.keys(tg).forEach(function (k3) { tgP[k3] = tg[k3]; });
               tgP.instagram_positions = keptPos;
-              return createAdset(tgP, attempt + 1);
+              return createAdsetNamed(name, budgetMinor, tgP, attempt + 1, rlTried, done);
             }
           }
           if (attempt < 2 && tg.interests && tg.interests.length && /deprecated/i.test(raw)) {
@@ -1526,25 +1498,144 @@ function madsDarkRun(jobId, input) {
               note('Meta retired ' + dropped + ' interest' + (dropped === 1 ? '' : 's') + ' — retrying without ' + (kept.length ? 'them' : 'interest targeting') + '…');
               var tg2 = {}; Object.keys(tg).forEach(function (k2) { tg2[k2] = tg[k2]; });
               if (kept.length) tg2.interests = kept; else delete tg2.interests;
-              return createAdset(tg2, attempt + 1);
+              return createAdsetNamed(name, budgetMinor, tg2, attempt + 1, rlTried, done);
             }
           }
-          return fail(serr);
+          return done(serr);
         }
-        out.adsetId = sj.id;
-        ledger('running');
-        runAds();
+        tgCurrent = tg;
+        done(null, sj.id);
       });
     }
-    createAdset(targeting, 0);
+    function runAds() {
+      var i = 0;
+      (function nextAd() {
+        if (i >= ads.length) {
+          if (job) { job.state = 'done'; job.result = out; }
+          ledger('done');
+          return;
+        }
+        var ad = ads[i++];
+        // already created by the failed attempt we're resuming — never remake it
+        if (out.ads[ad.adKey] && out.ads[ad.adKey].adId) return nextAd();
+        // per-ad record survives partial failures: a split run's ad set id
+        // must never be wiped by a later media/creative error
+        var slot = out.ads[ad.adKey] = out.ads[ad.adKey] || {};
+        delete slot.error;
+        function adFail(msg) { slot.error = String(msg).slice(0, 200); nextAd(); }
+        function makeCreative(storySpec) {
+          note('ad ' + i + '/' + ads.length + ': creating creative…');
+          fbRequest('POST', act + '/adcreatives', {
+            name: 'Ads Hub — ' + (ad.name || ad.adKey),
+            object_story_spec: storySpec,
+            url_tags: 'utm_source=ig&utm_campaign=adshub&utm_content=' + encodeURIComponent(ad.adKey),
+            access_token: tok
+          }, function (crerr, crj) {
+            if (crerr) return adFail(crerr.message);
+            note('ad ' + i + '/' + ads.length + ': creating ad (PAUSED)…');
+            fbRequest('POST', act + '/ads', {
+              name: (ad.name || 'Ad') + ' [' + ad.adKey + ']',
+              adset_id: split ? slot.adsetId : out.adsetId, creative: { creative_id: crj.id }, status: 'PAUSED', access_token: tok
+            }, function (aderr, adj) {
+              if (aderr) { slot.error = aderr.message.slice(0, 200); }
+              else { slot.adId = adj.id; slot.creativeId = crj.id; }
+              nextAd();
+            });
+          });
+        }
+        function withImageHash(b64, cb2) {
+          fbRequest('POST', act + '/adimages', { bytes: b64, access_token: tok }, function (ierr, ij) {
+            if (ierr) return cb2(ierr);
+            var imgs = ij.images || {};
+            var first = imgs.bytes || imgs[Object.keys(imgs)[0]];
+            if (!first || !first.hash) return cb2(new Error('Meta returned no image hash'));
+            cb2(null, first.hash);
+          });
+        }
+        function proceedMedia() {
+          note('ad ' + i + '/' + ads.length + ': uploading media…');
+          if (ad.kind === 'video' && ad.videoUrl) {
+            fbRequest('POST', act + '/advideos', { file_url: PUBLIC_BASE + ad.videoUrl, access_token: tok }, function (verr, vj) {
+              if (verr) return adFail(verr.message);
+              var videoId = vj.id, vtries = 0;
+              (function pollVideo() {
+                fbRequest('GET', '/' + videoId, { fields: 'status', access_token: tok }, function (perr2, pj2) {
+                  var st = pj2 && pj2.status && pj2.status.video_status;
+                  if (!perr2 && st === 'ready') {
+                    return withImageHash(ad.thumbB64, function (therr, thash) {
+                      if (therr) return adFail(therr.message);
+                      makeCreative({
+                        page_id: madsConf.pageId,
+                        instagram_user_id: madsConf.igUserId || undefined,
+                        video_data: { video_id: videoId, image_hash: thash, message: ad.caption || '', call_to_action: { type: 'LEARN_MORE', value: { link: ad.link } } }
+                      });
+                    });
+                  }
+                  if (!perr2 && st === 'error') return adFail('Meta could not process the video');
+                  if (++vtries > 36) return adFail('video processing timed out');
+                  note('ad ' + i + '/' + ads.length + ': video processing…');
+                  setTimeout(pollVideo, 5000);
+                });
+              })();
+            }, 300000);
+          } else {
+            withImageHash(ad.imageB64, function (ierr, hash) {
+              if (ierr) return adFail(ierr.message);
+              makeCreative({
+                page_id: madsConf.pageId,
+                instagram_user_id: madsConf.igUserId || undefined,
+                link_data: { link: ad.link, message: ad.caption || '', image_hash: hash, call_to_action: { type: 'LEARN_MORE', value: { link: ad.link } } }
+              });
+            });
+          }
+        }
+        if (split && !slot.adsetId) {
+          note('ad ' + i + '/' + ads.length + ': creating its own ad set…');
+          return createAdsetNamed(
+            'Ads Hub — ' + String(input.roundName || 'round').slice(0, 40) + ' · ' + String(ad.name || ad.adKey).slice(0, 60),
+            budgetFor(ad), tgCurrent, 0, false,
+            function (serr, id) {
+              if (serr) return adFail(serr.message);
+              slot.adsetId = id;
+              ledger('running');
+              proceedMedia();
+            }
+          );
+        }
+        proceedMedia();
+      })();
+    }
+    if (split) {
+      if (reuse) {
+        Object.keys(reuse.ads || {}).forEach(function (k) {
+          if (reuse.ads[k] && (reuse.ads[k].adId || reuse.ads[k].adsetId)) out.ads[k] = reuse.ads[k];
+        });
+        note('resuming the failed attempt — reusing what already exists…');
+      }
+      return runAds();
+    }
+    if (reuse && reuse.adsetId) {
+      out.adsetId = reuse.adsetId;
+      Object.keys(reuse.ads || {}).forEach(function (k) { if (reuse.ads[k] && reuse.ads[k].adId) out.ads[k] = reuse.ads[k]; });
+      note('resuming the failed attempt — reusing its paused campaign and ad set…');
+      return runAds();
+    }
+    createAdsetNamed('Ads Hub — ' + String(input.roundName || 'round').slice(0, 40), totalMinor, targeting, 0, false, function (serr, id) {
+      if (serr) return fail(serr);
+      out.adsetId = id;
+      ledger('running');
+      runAds();
+    });
   });
 }
 
 // Scale an EXISTING dark-ads run instead of posting fresh ads: pause the ads
-// that didn't make the cut and put more money/days on the SAME ad set. The
-// winners keep their ad objects — Instagram post, likes, comments and Meta's
-// learning all survive. Nothing is ever switched ON here: kept ads stay in
-// whatever state the user last gave them in Ads Manager.
+// that didn't make the cut and put more money/days on the SAME ad set(s). A
+// shared-budget round has one ad set; an equal-split round has one per ad —
+// there the added money is divided evenly across the KEPT ads' own budgets,
+// so the split stays fair. The winners keep their ad objects — Instagram
+// post, likes, comments and Meta's learning all survive. Nothing is ever
+// switched ON here: kept ads stay in whatever state the user last gave them.
 function madsScaleRun(jobId, input) {
   var tok = effectiveMadsToken();
   var job = igJobs[jobId];
@@ -1556,14 +1647,12 @@ function madsScaleRun(jobId, input) {
   // on every write in case a concurrent freshMadsRuns() merge swapped it out
   function ledgerSave() { rec.at = Date.now(); madsRuns[rid] = rec; saveMadsRuns(); }
   if (!tok) return fail(new Error('no_mads_token'));
-  if (!rec || !rec.campaignId || !rec.adsetId || !rec.ads) return fail(new Error('No dark-ads run is recorded for this round — post it as dark ads first.'));
+  var split = !!(rec && rec.split);
+  if (!rec || !rec.campaignId || !rec.ads || (!split && !rec.adsetId)) return fail(new Error('No dark-ads run is recorded for this round — post it as dark ads first.'));
   var mult = MADS_OFFSET_ONE[String((madsConf && madsConf.currency) || 'USD').toUpperCase()] ? 1 : 100;
   var addMinor = Math.round((parseFloat(input.addBudget) || 0) * mult);
   var days = Math.min(90, Math.max(0, parseInt(input.days, 10) || 0));
   var idem = String(input.idem || '');
-  // a retry of the SAME confirmed intent (job swept / crash mid-pause) must
-  // never add the money twice — the ledger remembers which idem already paid
-  var alreadyApplied = !!(idem && rec.lastScale && rec.lastScale.idem === idem);
   var keep = {};
   (Array.isArray(input.keep) ? input.keep : []).forEach(function (k) { keep[String(k)] = 1; });
   var loserKeys = Object.keys(rec.ads).filter(function (k) {
@@ -1571,75 +1660,144 @@ function madsScaleRun(jobId, input) {
   });
   if (!(addMinor > 0) && !days && !loserKeys.length) return fail(new Error('Nothing to change — untick ads to pause them, or add money/days.'));
   if (addMinor > 0 && !Object.keys(keep).length) return fail(new Error('Adding money with every ad paused would spend on nothing — keep at least one ad.'));
-  note('reading the live ad set…');
-  fbRequest('GET', '/' + rec.adsetId, { fields: 'lifetime_budget,end_time,effective_status', access_token: tok }, function (gerr, gj) {
-    if (gerr) return fail(gerr);
-    var st = gj.effective_status;
-    if (st === 'ARCHIVED' || st === 'DELETED') return fail(new Error('That campaign was archived/deleted in Ads Manager — this round would need a fresh dark-ads run instead.'));
-    var curMinor = parseInt(gj.lifetime_budget, 10) || 0;
-    var curEnd = gj.end_time ? new Date(gj.end_time).getTime() : Date.now();
-    var newMinor = alreadyApplied ? curMinor : curMinor + addMinor;
-    var newEndMs = alreadyApplied ? (rec.lastScale.endTimeMs || curEnd)
-      : (days ? Math.max(Date.now(), curEnd) + days * 86400 * 1000 : curEnd);
-    if (!alreadyApplied && addMinor > 0 && !days && curEnd <= Date.now()) {
-      return fail(new Error('This round already ended — add at least 1 day so the extra money can actually be spent.'));
-    }
-    function afterUpdate() {
-      // durable record BEFORE the slow pause loop: from here on this idem is "paid"
-      rec.lastScale = {
-        idem: idem, at: Date.now(), newBudget: newMinor / mult, endTimeMs: newEndMs,
-        keptButPaused: Object.keys(rec.ads).filter(function (k) { return keep[k] && rec.ads[k] && rec.ads[k].paused; })
-      };
-      ledgerSave();
-      var i = 0, pausedNow = [], pauseErrors = {};
-      (function nextPause() {
-        if (i >= loserKeys.length) {
-          var result = {
-            campaignId: rec.campaignId, adsetId: rec.adsetId,
-            newBudget: newMinor / mult, endTime: new Date(newEndMs).toISOString(),
-            kept: Object.keys(keep).length, paused: pausedNow, pauseErrors: pauseErrors,
-            keptButPaused: rec.lastScale.keptButPaused
-          };
-          rec.lastScale.result = result;   // replayed verbatim on an idem retry
-          ledgerSave();
-          if (job) { job.state = 'done'; job.result = result; }
-          return;
-        }
-        var k = loserKeys[i++];
-        note('pausing ad ' + i + '/' + loserKeys.length + '…');
-        var tried = 0;
-        (function pauseOne() {
-          fbRequest('POST', '/' + rec.ads[k].adId, { status: 'PAUSED', access_token: tok }, function (perr) {
-            if (perr) {
-              var code = perr.fb && perr.fb.code;
-              // rate limits (many pauses in a row): back off once, then record
-              // the miss and keep going rather than dying mid-list
-              if (!tried++ && (code === 17 || code === 613 || code === 80004 || code === 4 || code === 32)) {
-                note('Meta rate limit — waiting 30s before ad ' + i + '/' + loserKeys.length + '…');
-                return setTimeout(pauseOne, 30000);
-              }
-              pauseErrors[k] = perr.message.slice(0, 150);
-              return setTimeout(nextPause, 400);
-            }
-            rec.ads[k].paused = true;
-            pausedNow.push(k);
-            ledgerSave();
-            setTimeout(nextPause, 400);
-          });
-        })();
-      })();
-    }
-    var upd = { access_token: tok };
-    if (!alreadyApplied && addMinor > 0) upd.lifetime_budget = newMinor;
-    if (!alreadyApplied && days) upd.end_time = new Date(newEndMs).toISOString();
-    if (upd.lifetime_budget != null || upd.end_time) {
-      note(addMinor > 0 ? 'raising the budget on the existing ad set…' : 'extending the end date…');
-      fbRequest('POST', '/' + rec.adsetId, upd, function (uerr) {
-        if (uerr) return fail(uerr);
-        afterUpdate();
+  // which ad sets receive money/days: the shared one, or each KEPT ad's own
+  var targets = [];   // { id, addMinor, key }
+  if (addMinor > 0 || days) {
+    if (split) {
+      var keptWithSets = Object.keys(keep).filter(function (k) { return rec.ads[k] && rec.ads[k].adsetId; });
+      if (addMinor > 0 && !keptWithSets.length) return fail(new Error('None of the kept ads has its own ad set recorded — nothing to add the money to.'));
+      var per = keptWithSets.length ? Math.floor(addMinor / keptWithSets.length) : 0;
+      keptWithSets.forEach(function (k, idx) {
+        targets.push({ id: rec.ads[k].adsetId, addMinor: per + (idx === 0 ? addMinor - per * keptWithSets.length : 0), key: k });
       });
-    } else afterUpdate();
-  });
+    } else {
+      targets.push({ id: rec.adsetId, addMinor: addMinor, key: '' });
+    }
+  }
+  // a retry of the SAME confirmed intent (job swept / crash mid-run) must
+  // never add money twice — the ledger records every ad set already paid
+  // under this idem, and those are skipped on the way through. An empty idem
+  // gets NO durable memory (two idem-less runs are two separate intents).
+  if (!idem || !(rec.lastScale && rec.lastScale.idem === idem)) {
+    rec.lastScale = {
+      idem: idem, at: Date.now(), appliedAdsets: [],
+      keptButPaused: Object.keys(rec.ads).filter(function (k) { return keep[k] && rec.ads[k] && rec.ads[k].paused; })
+    };
+    ledgerSave();
+  } else if (!rec.lastScale.appliedAdsets) {
+    // pre-upgrade record: the old code only wrote lastScale AFTER its single
+    // budget POST succeeded — that shared ad set is already paid
+    rec.lastScale.appliedAdsets = rec.adsetId ? [rec.adsetId] : [];
+    ledgerSave();
+  }
+  var applied = rec.lastScale.appliedAdsets = rec.lastScale.appliedAdsets || [];
+  var updateErrors = {}, updatedBudgets = [], lastEndMs = 0, addedMinor = 0;
+  var ti = 0;
+  (function nextTarget() {
+    if (ti >= targets.length) return pauseLosers();
+    var t = targets[ti++];
+    if (applied.indexOf(t.id) >= 0) return nextTarget();   // this idem already paid this ad set
+    note(targets.length > 1 ? ('updating budget ' + ti + '/' + targets.length + '…') : (t.addMinor > 0 ? 'raising the budget on the existing ad set…' : 'extending the end date…'));
+    var gTried = 0;
+    (function getOne() {
+    fbRequest('GET', '/' + t.id, { fields: 'lifetime_budget,end_time,effective_status', access_token: tok }, function (gerr, gj) {
+      if (gerr) {
+        var gcode = gerr.fb && gerr.fb.code;
+        if (!gTried++ && (gcode === 17 || gcode === 613 || gcode === 80004 || gcode === 4 || gcode === 32)) {
+          note('Meta rate limit — waiting 30s…');
+          return setTimeout(getOne, 30000);
+        }
+        if (!split) return fail(gerr);
+        updateErrors[t.key || t.id] = gerr.message.slice(0, 150); return setTimeout(nextTarget, 800);
+      }
+      var st = gj.effective_status;
+      if (st === 'ARCHIVED' || st === 'DELETED') {
+        if (!split) return fail(new Error('That campaign was archived/deleted in Ads Manager — this round would need a fresh dark-ads run instead.'));
+        updateErrors[t.key || t.id] = 'archived/deleted in Ads Manager'; return nextTarget();
+      }
+      var curMinor = parseInt(gj.lifetime_budget, 10) || 0;
+      var curEnd = gj.end_time ? new Date(gj.end_time).getTime() : Date.now();
+      if (t.addMinor > 0 && !days && curEnd <= Date.now()) {
+        if (!split) return fail(new Error('This round already ended — add at least 1 day so the extra money can actually be spent.'));
+        updateErrors[t.key || t.id] = 'already ended — add at least 1 day too'; return nextTarget();
+      }
+      var newMinor = curMinor + t.addMinor;
+      var newEndMs = days ? Math.max(Date.now(), curEnd) + days * 86400 * 1000 : curEnd;
+      var upd = { access_token: tok };
+      if (t.addMinor > 0) upd.lifetime_budget = newMinor;
+      if (days) upd.end_time = new Date(newEndMs).toISOString();
+      if (upd.lifetime_budget == null && !upd.end_time) return nextTarget();
+      var tried = 0;
+      (function updOne() {
+        fbRequest('POST', '/' + t.id, upd, function (uerr) {
+          if (uerr) {
+            var code = uerr.fb && uerr.fb.code;
+            if (!tried++ && (code === 17 || code === 613 || code === 80004 || code === 4 || code === 32)) {
+              note('Meta rate limit — waiting 30s…');
+              return setTimeout(updOne, 30000);
+            }
+            if (!split) return fail(uerr);
+            updateErrors[t.key || t.id] = uerr.message.slice(0, 150);
+            return setTimeout(nextTarget, 800);
+          }
+          applied.push(t.id);
+          updatedBudgets.push(newMinor);
+          addedMinor += t.addMinor;
+          if (newEndMs > lastEndMs) lastEndMs = newEndMs;
+          // the paid record AND the achieved end date are durable per target —
+          // a crash mid-list resumes with both intact
+          rec.lastScale.endTimeMs = Math.max(rec.lastScale.endTimeMs || 0, newEndMs);
+          ledgerSave();
+          setTimeout(nextTarget, targets.length > 1 ? 1200 : 0);
+        });
+      })();
+    });
+    })();
+  })();
+  function pauseLosers() {
+    var i = 0, pausedNow = [], pauseErrors = {};
+    (function nextPause() {
+      if (i >= loserKeys.length) {
+        var keptN = Object.keys(keep).length;
+        var result = {
+          campaignId: rec.campaignId, adsetId: rec.adsetId || '', split: split,
+          newBudget: !split && updatedBudgets.length ? updatedBudgets[0] / mult : null,
+          addPerAd: split && targets.length && addMinor > 0 ? Math.floor(addMinor / targets.length) / mult : null,
+          addedTotal: addedMinor / mult,   // money that actually LANDED this run
+          endTime: lastEndMs ? new Date(lastEndMs).toISOString() : (rec.lastScale.endTimeMs ? new Date(rec.lastScale.endTimeMs).toISOString() : ''),
+          kept: keptN, paused: pausedNow, pauseErrors: pauseErrors, updateErrors: updateErrors,
+          keptButPaused: rec.lastScale.keptButPaused
+        };
+        rec.lastScale.endTimeMs = lastEndMs || rec.lastScale.endTimeMs;
+        rec.lastScale.result = result;   // replayed verbatim on an idem retry
+        ledgerSave();
+        if (job) { job.state = 'done'; job.result = result; }
+        return;
+      }
+      var k = loserKeys[i++];
+      note('pausing ad ' + i + '/' + loserKeys.length + '…');
+      var tried = 0;
+      (function pauseOne() {
+        fbRequest('POST', '/' + rec.ads[k].adId, { status: 'PAUSED', access_token: tok }, function (perr) {
+          if (perr) {
+            var code = perr.fb && perr.fb.code;
+            // rate limits (many pauses in a row): back off once, then record
+            // the miss and keep going rather than dying mid-list
+            if (!tried++ && (code === 17 || code === 613 || code === 80004 || code === 4 || code === 32)) {
+              note('Meta rate limit — waiting 30s before ad ' + i + '/' + loserKeys.length + '…');
+              return setTimeout(pauseOne, 30000);
+            }
+            pauseErrors[k] = perr.message.slice(0, 150);
+            return setTimeout(nextPause, 400);
+          }
+          rec.ads[k].paused = true;
+          pausedNow.push(k);
+          ledgerSave();
+          setTimeout(nextPause, 400);
+        });
+      })();
+    })();
+  }
 }
 
 /* ---- Transcription proxy (local transcribe-hub on :3004) ------------------ */
@@ -2689,7 +2847,7 @@ var server = http.createServer(function (req, res) {
         Object.keys(recR.ads).length && Object.keys(recR.ads).every(function (k) { return recR.ads[k] && recR.ads[k].adId; }));
       if (/:first$/.test(idem) && recClean) {
         var healId = 'heal-' + Date.now().toString(36) + crypto.randomBytes(3).toString('hex');
-        igJobs[healId] = { state: 'done', at: Date.now(), result: { campaignId: recR.campaignId, adsetId: recR.adsetId, ads: recR.ads || {} } };
+        igJobs[healId] = { state: 'done', at: Date.now(), result: { campaignId: recR.campaignId, adsetId: recR.adsetId, split: !!recR.split, ads: recR.ads || {} } };
         return sendJSON(res, 200, { ok: true, job: healId, state: 'done', recovered: true });
       }
       var jobId = idem || ('mads-' + Date.now().toString(36) + crypto.randomBytes(4).toString('hex'));
@@ -2708,14 +2866,20 @@ var server = http.createServer(function (req, res) {
       var rid = String(input.roundId || '');
       if (!rid || !freshMadsRuns()[rid]) return sendJSON(res, 400, { error: 'bad_args', message: 'No dark-ads run is recorded for this round.' });
       var idem = String(input.idem || '').slice(0, 120);
-      if (idem && igJobs[idem] && igJobs[idem].state !== 'error') {
-        return sendJSON(res, 200, { ok: true, job: idem, state: igJobs[idem].state });
+      function hasUpdErrs(r2) { return !!(r2 && r2.updateErrors && Object.keys(r2.updateErrors).length); }
+      // a running job, or a finished one with NO failed money-updates, is
+      // final for this idem. One that finished with updateErrors re-runs:
+      // appliedAdsets protects everything already paid, so only the failed
+      // ad sets get another attempt.
+      var memJob = idem ? igJobs[idem] : null;
+      if (memJob && (memJob.state === 'running' || (memJob.state === 'done' && !hasUpdErrs(memJob.result)))) {
+        return sendJSON(res, 200, { ok: true, job: idem, state: memJob.state });
       }
       // durable dedupe: this exact confirmed intent already ran to completion
       // (job swept / server restarted) — hand back the recorded result instead
       // of adding the money a second time
       var recS = madsRuns[rid];
-      if (idem && recS.lastScale && recS.lastScale.idem === idem && recS.lastScale.result) {
+      if (idem && recS.lastScale && recS.lastScale.idem === idem && recS.lastScale.result && !hasUpdErrs(recS.lastScale.result)) {
         var replayId = 'scl-' + Date.now().toString(36) + crypto.randomBytes(3).toString('hex');
         igJobs[replayId] = { state: 'done', at: Date.now(), result: recS.lastScale.result };
         return sendJSON(res, 200, { ok: true, job: replayId, state: 'done', recovered: true });
