@@ -467,15 +467,35 @@ window.Ads = window.Ads || {};
   function trackRows() {
     var t = store.getTracking(); var snap = t.snapshot; if (!snap || !snap.ads) return [];
     var spend = t.spend || {};
+    // Meta-BILLED link clicks per creative (summed across its runs): the
+    // real-people count Meta charged for. The tracker's own click count also
+    // carries whatever machine traffic slipped the UA filter (Meta's link
+    // scanners/prefetchers use real phone-browser signatures), so where an ad
+    // ran as a dark ad, Meta's number is the honest one.
+    var dkBy = (t.dark || {}).byId || {};
+    var dkIds = darkAdIdsByKey();
+    var metaClicksBy = {};
+    Object.keys(dkIds).forEach(function (k) {
+      var sum = 0, has = false;
+      dkIds[k].forEach(function (id) {
+        var m = dkBy[id];
+        if (!m || m.error) return;
+        var v = m.linkClicks != null ? m.linkClicks : m.clicks;   // linkClicks lands on first sync after this deploy
+        if (v != null) { sum += +v; has = true; }
+      });
+      if (has) metaClicksBy[k] = sum;
+    });
     return Object.keys(snap.ads).map(function (key) {
       var a = snap.ads[key] || {}; var sp = spend[key] != null ? util.num(spend[key]) : null;
+      var mc = metaClicksBy[key] != null ? metaClicksBy[key] : null;
+      var clickBase = mc != null ? mc : (a.clicks || 0);   // cost/click on billed clicks when Meta knows them
       return {
         key: key, name: a.name || a.headline || key, headline: a.headline || '', page: a.page || '',
-        clicks: a.clicks || 0, views: a.views || 0, uniques: a.uniques || 0,
+        clicks: a.clicks || 0, metaClicks: mc, views: a.views || 0, uniques: a.uniques || 0,
         avgSeconds: a.avgSeconds || 0, scrollAvg: a.scrollAvg || 0, outs: a.outs || 0, outRate: a.outRate || 0,
         bySrc: a.bySrc || {}, spend: sp,
         viewRate: (a.clicks ? a.views / a.clicks : null),   // clicks that actually loaded the page
-        cpc: (sp != null && a.clicks) ? sp / a.clicks : null,
+        cpc: (sp != null && clickBase) ? sp / clickBase : null,
         cps: (sp != null && a.outs) ? sp / a.outs : null    // cost per person who went on to the site
       };
     });
@@ -521,13 +541,19 @@ window.Ads = window.Ads || {};
       // portfolio totals across every tracked ad
       var tot = rows.reduce(function (o, r) {
         o.clicks += r.clicks; o.views += r.views; o.outs += r.outs; o.uniques += r.uniques;
+        if (r.metaClicks != null) { o.metaClicks += r.metaClicks; o.hasMeta = true; }
         o.dwell += r.avgSeconds * r.uniques; o.spend += (r.spend || 0); return o;
-      }, { clicks: 0, views: 0, outs: 0, uniques: 0, dwell: 0, spend: 0 });
+      }, { clicks: 0, metaClicks: 0, hasMeta: false, views: 0, outs: 0, uniques: 0, dwell: 0, spend: 0 });
       var blendAvg = tot.uniques ? tot.dwell / tot.uniques : 0;
       var anySpend = rows.some(function (r) { return r.spend != null; });
 
+      // Meta's billed link clicks are the real-people count — lead with them
+      // when the ads ran as dark ads; the tracker's own tally (which machine
+      // prefetches can inflate despite the bot filter) becomes "link hits"
       var kpis = '<div class="grid cols-4 view-section">' +
-        kpi('Link clicks', util.fmtNum(tot.clicks, 0), tot.views + ' opened the page', true) +
+        (tot.hasMeta
+          ? kpi('Link clicks (Meta)', util.fmtNum(tot.metaClicks, 0), tot.views + ' opened the page · ' + util.fmtNum(tot.clicks, 0) + ' raw link hits', true)
+          : kpi('Link clicks', util.fmtNum(tot.clicks, 0), tot.views + ' opened the page', true)) +
         kpi('Avg time on page', fmtDur(blendAvg), 'across ' + tot.uniques + ' visitors') +
         kpi('Went to your site', util.fmtNum(tot.outs, 0), (tot.views ? Math.round(100 * tot.outs / tot.views) : 0) + '% of visitors') +
         kpi('Total spend', money(tot.spend || null), anySpend ? (tot.outs ? money(tot.spend / tot.outs) + ' per site visit' : '—') : 'add spend below') +
@@ -561,11 +587,14 @@ window.Ads = window.Ads || {};
       return (av - bv) * trackUI.dir;
     });
     var byKey = adsByKey();
-    function th(key, label, cls) {
-      return '<th class="' + (cls || '') + ' sortable" data-tsort="' + key + '">' + label +
+    function th(key, label, cls, tip) {
+      return '<th class="' + (cls || '') + ' sortable" data-tsort="' + key + '"' + (tip ? ' title="' + esc(tip) + '"' : '') + '>' + label +
         (trackUI.sort === key ? ' <span class="arrow">' + (trackUI.dir < 0 ? '▾' : '▴') + '</span>' : '') + '</th>';
     }
-    var head = '<tr>' + th('name', 'Ad') + '<th>Sources</th>' + th('clicks', 'Clicks', 'num') +
+    var anyMeta = rows.some(function (r) { return r.metaClicks != null; });
+    var head = '<tr>' + th('name', 'Ad') + '<th>Sources</th>' +
+      (anyMeta ? th('metaClicks', 'Clicks (Meta)', 'num', 'link clicks Meta billed — real people, from the ads API') : '') +
+      th('clicks', anyMeta ? 'Link hits' : 'Clicks', 'num', 'taps on the tracked link after bot filtering — still includes machine prefetches that fake a real phone browser') +
       th('views', 'Views', 'num') + th('uniques', 'Visitors', 'num') + th('avgSeconds', 'Avg time', 'num') +
       th('scrollAvg', 'Scroll', 'num') + th('outs', '→ Site', 'num') + th('outRate', 'CTR→site', 'num') +
       th('spend', 'Spend', 'num') + th('cpc', 'Cost/click', 'num') + th('cps', 'Cost/visit', 'num') + '</tr>';
@@ -579,6 +608,7 @@ window.Ads = window.Ads || {};
           (igLinks[r.key] ? ' · <a href="' + esc(igLinks[r.key].url) + '" target="_blank" rel="noopener" referrerpolicy="no-referrer" data-stop="1">' + esc(igLinks[r.key].lbl) + '</a>' : '') +
           '</div></div></div></td>' +
         '<td class="trk-src">' + srcChips(r.bySrc) + '</td>' +
+        (anyMeta ? '<td class="num">' + (r.metaClicks != null ? util.fmtNum(r.metaClicks, 0) : '—') + '</td>' : '') +
         '<td class="num">' + util.fmtNum(r.clicks, 0) + '</td>' +
         '<td class="num">' + util.fmtNum(r.views, 0) + '</td>' +
         '<td class="num">' + util.fmtNum(r.uniques, 0) + '</td>' +
@@ -1119,7 +1149,10 @@ window.Ads = window.Ads || {};
           if (dkm && !dkm.error) {
             if (dkm.status) dbits.push(dkm.status === 'PAUSED' ? 'paused' : dkm.status.toLowerCase());
             if (dkm.impressions != null) dbits.push(dkm.impressions + ' impr');
-            if (dkm.clicks != null) dbits.push(dkm.clicks + ' clicks');
+            // linkClicks = what Meta billed (real people); clicks = "clicks
+            // (all)" incl. profile taps — only shown until the next sync
+            if (dkm.linkClicks != null) dbits.push(dkm.linkClicks + ' clicks');
+            else if (dkm.clicks != null) dbits.push(dkm.clicks + ' clicks');
             if (dkm.spend != null) dbits.push(dkm.spend + ' ' + esc((r.dark && r.dark.currency) || '') + ' spent');
             if (dkm.cpc != null) dbits.push(dkm.cpc + '/click');
             if (dkm.likes != null) dbits.push('♥ ' + dkm.likes);
@@ -1890,8 +1923,9 @@ window.Ads = window.Ads || {};
       return { key: k, spec: byKey[k] || null, adId: run.ads[k].adId, paused: !!run.ads[k].paused || m2.status === 'PAUSED', m: m2 };
     });
     if (!items.length) return Ads.toast('This round has no live dark ads', true);
-    // winners float to the top: most clicks, then most impressions
-    items.sort(function (a, b) { return ((b.m.clicks || 0) - (a.m.clicks || 0)) || ((b.m.impressions || 0) - (a.m.impressions || 0)); });
+    // winners float to the top: most billed link clicks, then most impressions
+    function mClicks(x) { return x.m.linkClicks != null ? x.m.linkClicks : (x.m.clicks || 0); }
+    items.sort(function (a, b) { return (mClicks(b) - mClicks(a)) || ((b.m.impressions || 0) - (a.m.impressions || 0)); });
     var cur = (run.currency || conf.currency || 'USD');
     var curBudget = parseFloat(run.budget) || 0;
     var curEndMs = run.endTime ? new Date(run.endTime).getTime()
@@ -1899,7 +1933,8 @@ window.Ads = window.Ads || {};
     var rows = items.map(function (it) {
       var bits = [];
       if (it.m.impressions != null) bits.push(it.m.impressions + ' impr');
-      if (it.m.clicks != null) bits.push(it.m.clicks + ' clicks');
+      if (it.m.linkClicks != null) bits.push(it.m.linkClicks + ' clicks');
+      else if (it.m.clicks != null) bits.push(it.m.clicks + ' clicks');
       if (it.m.spend != null) bits.push(it.m.spend + ' ' + cur + ' spent');
       if (it.m.cpc != null) bits.push(it.m.cpc + '/click');
       if (it.m.likes != null) bits.push('♥ ' + it.m.likes);

@@ -2743,12 +2743,15 @@ var server = http.createServer(function (req, res) {
         var id = ids[i++];
         fbRequest('GET', '/' + id, { fields: 'effective_status,name,creative{effective_instagram_media_id}', access_token: tok }, function (serr, sj) {
           if (serr) { byId[id] = { error: serr.message.slice(0, 200) }; return next(); }
-          fbRequest('GET', '/' + id + '/insights', { fields: 'impressions,reach,clicks,ctr,spend,cpc', date_preset: 'maximum', access_token: tok }, function (ierr, ij) {
+          fbRequest('GET', '/' + id + '/insights', { fields: 'impressions,reach,clicks,inline_link_clicks,ctr,spend,cpc', date_preset: 'maximum', access_token: tok }, function (ierr, ij) {
             var row = (ij && ij.data && ij.data[0]) || {};
             byId[id] = {
               status: sj.effective_status || '',
               impressions: row.impressions != null ? +row.impressions : null,
               reach: row.reach != null ? +row.reach : null,
+              // clicks = Meta's "clicks (all)" (profile taps included);
+              // linkClicks = billed link clicks — the real-people number
+              linkClicks: row.inline_link_clicks != null ? +row.inline_link_clicks : null,
               clicks: row.clicks != null ? +row.clicks : null,
               ctr: row.ctr != null ? +(+row.ctr).toFixed(2) : null,
               spend: row.spend != null ? +row.spend : null,
