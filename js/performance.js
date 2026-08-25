@@ -368,6 +368,16 @@ window.Ads = window.Ads || {};
   }
   // adKey → approved ad record (for a thumbnail + a link to the full ad detail)
   function adsByKey() { var m = {}; store.allAds().forEach(function (a) { if (a.adKey) m[a.adKey] = a; }); return m; }
+  // adKey → the saved ad SPEC (searched across every project) — the tracked
+  // ads live in project.savedAds, not the legacy ads collection, so this is
+  // what actually finds a thumbnail for Live Tracking rows
+  function savedSpecsByKey() {
+    var m = {};
+    store.listProjects().forEach(function (p) {
+      (p.savedAds || []).forEach(function (a) { if (a.adKey && !m[a.adKey]) m[a.adKey] = a; });
+    });
+    return m;
+  }
   // adKey → the ad's real Instagram post URL: organic posts carry it directly,
   // dark ads get it from the synced insights. These pages render for the
   // account owner's logged-in session (and the IG app) — the user's preference.
@@ -548,11 +558,11 @@ window.Ads = window.Ads || {};
       var anySpend = rows.some(function (r) { return r.spend != null; });
 
       // Meta's billed link clicks are the real-people count — lead with them
-      // when the ads ran as dark ads; the tracker's own tally (which machine
-      // prefetches can inflate despite the bot filter) becomes "link hits"
+      // when the ads ran as dark ads; the tracker's raw tally (which machine
+      // prefetches inflate despite the bot filter) is not shown at all
       var kpis = '<div class="grid cols-4 view-section">' +
         (tot.hasMeta
-          ? kpi('Link clicks (Meta)', util.fmtNum(tot.metaClicks, 0), tot.views + ' opened the page · ' + util.fmtNum(tot.clicks, 0) + ' raw link hits', true)
+          ? kpi('Link clicks (Meta)', util.fmtNum(tot.metaClicks, 0), tot.views + ' opened the page', true)
           : kpi('Link clicks', util.fmtNum(tot.clicks, 0), tot.views + ' opened the page', true)) +
         kpi('Avg time on page', fmtDur(blendAvg), 'across ' + tot.uniques + ' visitors') +
         kpi('Went to your site', util.fmtNum(tot.outs, 0), (tot.views ? Math.round(100 * tot.outs / tot.views) : 0) + '% of visitors') +
@@ -567,12 +577,10 @@ window.Ads = window.Ads || {};
         '<strong>' + esc(best.name) + '</strong> — ' + (best.cps != null ? money(best.cps) + ' per site visit' : best.outs + ' site visits') + '</div>') : '';
 
       el.innerHTML = head + kpis + bestNote +
-        '<div class="view-section"><div class="section-head"><h2>Every ad, ranked</h2>' +
-          '<span class="section-action"><button class="btn is-ghost is-sm" id="trk-spend-csv">Import spend (Meta CSV)</button></span></div>' +
+        '<div class="view-section"><div class="section-head"><h2>Every ad, ranked</h2></div>' +
           '<div id="trk-table"></div></div>';
       renderTable(el);
       bindSync(el);
-      el.querySelector('#trk-spend-csv').addEventListener('click', function () { spendCsvModal(el); });
     }
   });
 
@@ -592,24 +600,30 @@ window.Ads = window.Ads || {};
         (trackUI.sort === key ? ' <span class="arrow">' + (trackUI.dir < 0 ? '▾' : '▴') + '</span>' : '') + '</th>';
     }
     var anyMeta = rows.some(function (r) { return r.metaClicks != null; });
+    // real-people numbers only: when Meta's billed clicks are known, the raw
+    // tracker tally (which stealth machine prefetches inflate) is not shown
     var head = '<tr>' + th('name', 'Ad') + '<th>Sources</th>' +
-      (anyMeta ? th('metaClicks', 'Clicks (Meta)', 'num', 'link clicks Meta billed — real people, from the ads API') : '') +
-      th('clicks', anyMeta ? 'Link hits' : 'Clicks', 'num', 'taps on the tracked link after bot filtering — still includes machine prefetches that fake a real phone browser') +
+      (anyMeta ? th('metaClicks', 'Clicks', 'num', 'link clicks Meta billed — real people, straight from the ads API')
+               : th('clicks', 'Clicks', 'num', 'taps on the tracked link after bot filtering')) +
       th('views', 'Views', 'num') + th('uniques', 'Visitors', 'num') + th('avgSeconds', 'Avg time', 'num') +
       th('scrollAvg', 'Scroll', 'num') + th('outs', '→ Site', 'num') + th('outRate', 'CTR→site', 'num') +
       th('spend', 'Spend', 'num') + th('cpc', 'Cost/click', 'num') + th('cps', 'Cost/visit', 'num') + '</tr>';
     var igLinks = igLinksByAdKey();
+    var specs = savedSpecsByKey();
     var body = rows.map(function (r) {
       var matched = byKey[r.key];
+      var thumb = matched ? '<div class="cr-thumb" data-thumb-ad="' + matched.id + '"></div>'
+        : specs[r.key] ? '<div class="cr-thumb cr-stage-scaler" data-thumb-spec="' + esc(r.key) + '"></div>'
+        : '<div class="cr-thumb trk-nothumb">' + icons().globe + '</div>';
       return '<tr class="is-clickable" data-trkrow="' + esc(r.key) + '">' +
-        '<td><div class="cr-cell">' + (matched ? '<div class="cr-thumb" data-thumb-ad="' + matched.id + '"></div>' : '<div class="cr-thumb trk-nothumb">' + icons().globe + '</div>') +
+        '<td><div class="cr-cell">' + thumb +
           '<div style="min-width:0"><div class="ac-name u-truncate">' + esc(r.name) + '</div>' +
           '<div class="u-faint" style="font-size:1.05rem">' + (r.page ? '/p/' + esc(r.page) : esc(r.headline)).slice(0, 60) +
           (igLinks[r.key] ? ' · <a href="' + esc(igLinks[r.key].url) + '" target="_blank" rel="noopener" referrerpolicy="no-referrer" data-stop="1">' + esc(igLinks[r.key].lbl) + '</a>' : '') +
           '</div></div></div></td>' +
         '<td class="trk-src">' + srcChips(r.bySrc) + '</td>' +
-        (anyMeta ? '<td class="num">' + (r.metaClicks != null ? util.fmtNum(r.metaClicks, 0) : '—') + '</td>' : '') +
-        '<td class="num">' + util.fmtNum(r.clicks, 0) + '</td>' +
+        (anyMeta ? '<td class="num">' + (r.metaClicks != null ? util.fmtNum(r.metaClicks, 0) : '—') + '</td>'
+                 : '<td class="num">' + util.fmtNum(r.clicks, 0) + '</td>') +
         '<td class="num">' + util.fmtNum(r.views, 0) + '</td>' +
         '<td class="num">' + util.fmtNum(r.uniques, 0) + '</td>' +
         '<td class="num">' + fmtDur(r.avgSeconds) + '</td>' +
@@ -627,6 +641,10 @@ window.Ads = window.Ads || {};
 
     var scope = el.querySelector('#trk-table');
     scope.querySelectorAll('[data-thumb-ad]').forEach(function (n) { var a = store.getAd(n.getAttribute('data-thumb-ad')); if (a) thumbFor(n, a, 54, 54); });
+    scope.querySelectorAll('[data-thumb-spec]').forEach(function (n) {
+      var a = specs[n.getAttribute('data-thumb-spec')];
+      if (a) { try { thumbFor(n, a, 54, null); } catch (e) {} }
+    });
     scope.querySelectorAll('th.sortable').forEach(function (th) {
       th.addEventListener('click', function () {
         var k = th.getAttribute('data-tsort');
@@ -686,8 +704,12 @@ window.Ads = window.Ads || {};
   function trackDetail(key) {
     var r = trackRows().filter(function (x) { return x.key === key; })[0]; if (!r) return;
     var matched = adsByKey()[key];
+    var spec = savedSpecsByKey()[key] || null;
+    // real people only: the funnel's click count is Meta's billed number when
+    // this ad ran as a dark ad (the raw tracker tally carries machine hits)
+    var mc = r.metaClicks != null ? r.metaClicks : r.clicks;
     var funnel = charts.barsH([
-      { label: 'Link clicks', value: r.clicks, display: util.fmtNum(r.clicks, 0) },
+      { label: r.metaClicks != null ? 'Link clicks (Meta)' : 'Link clicks', value: mc, display: util.fmtNum(mc, 0) },
       { label: 'Opened page', value: r.views, display: util.fmtNum(r.views, 0) },
       { label: 'Unique visitors', value: r.uniques, display: util.fmtNum(r.uniques, 0) },
       { label: 'Went to site', value: r.outs, display: util.fmtNum(r.outs, 0), cls: 'good' }
@@ -697,11 +719,15 @@ window.Ads = window.Ads || {};
     Ads.modal({
       title: r.name, wide: true,
       body: '<div class="grid cols-2" style="align-items:start;gap:2.4rem">' +
-          '<div><div class="card-head"><h3>The funnel</h3></div>' + funnel +
+          '<div>' +
+            (spec ? '<div class="card-head"><h3>The ad</h3></div>' +
+              '<div class="trk-det-ad"><div class="cr-stage-scaler" id="trk-det-creative"></div></div>' +
+              (spec.caption ? '<div class="trk-det-cap u-faint">' + esc(String(spec.caption).slice(0, 400)) + '</div>' : '') : '') +
+            '<div class="card-head"' + (spec ? ' style="margin-top:2rem"' : '') + '><h3>The funnel</h3></div>' + funnel +
             '<div class="metric-grid" style="margin-top:1.6rem">' +
               statCell('Avg time on page', fmtDur(r.avgSeconds)) +
               statCell('Avg scroll depth', r.scrollAvg ? r.scrollAvg + '%' : '—') +
-              statCell('Click → page', r.viewRate != null ? Math.round(r.viewRate * 100) + '%' : '—') +
+              statCell('Click → page', mc ? Math.round(r.views / mc * 100) + '%' : '—') +
               statCell('Visitor → site', r.views ? Math.round(r.outRate * 100) + '%' : '—') +
             '</div>' +
           '</div>' +
@@ -716,11 +742,26 @@ window.Ads = window.Ads || {};
       foot: [{ label: 'Close', act: 'close' }],
       onAction: function (act) { if (act === 'close') Ads.closeModal(); },
       onMount: function (m) {
+        // the full ad, rendered like the round page: still by default,
+        // videos play on hover
+        var cv = m.querySelector('#trk-det-creative');
+        if (cv && spec) {
+          try { mountThumbFitted(cv, spec, 300, 380); } catch (e) {}
+          if (spec.kind === 'video' && Ads.video) {
+            cv.addEventListener('mouseenter', function () {
+              if (cv._vc) return;
+              try { cv._vc = Ads.video.mount(cv, spec, true); } catch (e) {}
+            });
+            cv.addEventListener('mouseleave', function () {
+              if (cv._vc) { try { cv._vc.poster(); } catch (e) {} cv._vc = null; }
+            });
+          }
+        }
         var sp = m.querySelector('#trk-det-spend');
         function liveVal() { return sp.value === '' ? null : util.num(sp.value); }
         // live feedback while typing — compute from the typed value, no store write
         sp.addEventListener('input', function () {
-          m.querySelector('#trk-det-derived').innerHTML = costsFrom(r.clicks, r.views, r.outs, liveVal());
+          m.querySelector('#trk-det-derived').innerHTML = costsFrom(mc, r.views, r.outs, liveVal());
         });
         // commit + refresh the leaderboard/KPIs only on change (blur/enter), like
         // the inline table input — one store write, not one per keystroke, and the
@@ -743,63 +784,11 @@ window.Ads = window.Ads || {};
       statCell('Cost per page view', money(spend != null && views ? spend / views : null)) +
       statCell('Total spend', money(spend));
   }
-  function detCosts(r) { return costsFrom(r.clicks, r.views, r.outs, r.spend); }
-
-  // fill spend for many ads at once from a Meta CSV, matched by ad name
-  function spendCsvModal(view) {
-    Ads.modal({
-      title: 'Import spend from a Meta CSV', wide: true,
-      body: '<p class="u-muted" style="margin-bottom:1.4rem"><strong>Dark ads don’t need this</strong> — Sync now fills their exact spend straight from Meta. This import is for money spent outside Ads Hub (manual boosts, campaigns made in Ads Manager): in <strong>Ads Manager → Ads tab → Export</strong>, export table data as .csv and paste it here. Rows match by <strong>ad name</strong> (an “[ad-…]” tag in the name matches exactly), rows for the same ad are summed, and the total fills <strong>Amount spent</strong>. A figure imported for a dark-run ad is replaced by the exact Meta number at the next sync.</p>' +
-        '<div class="field"><label>Paste CSV</label><textarea class="textarea" id="trk-csv" style="min-height:10rem" placeholder="Ad name,Amount spent (CAD),...\nBeta hook [ad-xxxxxxxx],42.10,..."></textarea></div>' +
-        '<div id="trk-csv-out"></div>',
-      foot: [{ label: 'Close', act: 'close', ghost: true }, { label: 'Match & fill', act: 'go', primary: true }],
-      onAction: function (act, m) {
-        if (act === 'close') return Ads.closeModal();
-        if (act !== 'go') return;
-        var text = m.querySelector('#trk-csv').value.trim();
-        if (!text) { Ads.toast('Paste some CSV first', true); return; }
-        var rows = util.parseCSV(text);
-        if (!rows.length) { m.querySelector('#trk-csv-out').innerHTML = '<div class="notice warn">No rows found.</div>'; return; }
-        var lower = {}; Object.keys(rows[0]).forEach(function (h) { lower[h.toLowerCase().trim()] = h; });
-        function findCol(keys) { for (var i = 0; i < keys.length; i++) if (lower[keys[i]]) return lower[keys[i]]; return null; }
-        var nameCol = findCol(['ad name', 'ad', 'name', 'creative name']) || Object.keys(rows[0])[0];
-        // Meta writes the account currency into the header — "Amount spent
-        // (CAD)", "(EUR)" … — so fall back to a prefix match after exact ones
-        var spendCol = findCol(CSV_MAP.spend);
-        if (!spendCol) Object.keys(lower).some(function (h) { if (h.indexOf('amount spent') === 0) { spendCol = lower[h]; return true; } return false; });
-        if (!spendCol) { m.querySelector('#trk-csv-out').innerHTML = '<div class="notice warn">No “Amount spent” column found.</div>'; return; }
-        // tracked-ad names → adKey (from the last synced snapshot); the
-        // [ad-…] tag match only accepts KEYS WE KNOW (tracked or dark-run) —
-        // a random bracketed token in an ad name must not invent store entries
-        var byName = {}, known = {};
-        trackRows().forEach(function (r) { byName[r.name.toLowerCase().trim()] = r.key; known[r.key] = 1; });
-        Object.keys(darkAdIdsByKey()).forEach(function (k) { known[k] = 1; });
-        // the same creative can appear as several rows (one per campaign it
-        // ran in) — its true total is the SUM, not whichever row came last
-        var sums = {};
-        rows.forEach(function (row) {
-          var nm = String(row[nameCol] || '').trim().toLowerCase();
-          // ads posted by Ads Hub are named "… [ad-xxxxx]" on Meta — that key
-          // is an exact, collision-proof match; plain name match is a fallback
-          var km = /\[(ad-[a-z0-9]+)\]/.exec(nm);
-          var key = (km && known[km[1]] ? km[1] : null) || byName[nm] ||
-            byName[nm.replace(/\s*\[ad-[a-z0-9]+\]\s*$/, '').trim()];   // tagged name, unknown tag → match the base name
-          if (!key) return;
-          // a blank / non-numeric "Amount spent" cell (common for paused or
-          // zero-delivery ads) must NOT wipe spend the user already has — skip it
-          var v = util.num(row[spendCol]);
-          if (v == null) return;
-          sums[key] = (sums[key] || 0) + v;
-        });
-        var keys = Object.keys(sums);
-        keys.forEach(function (key) { store.setTrackSpend(key, Math.round(sums[key] * 100) / 100); });
-        var n = keys.length;
-        Ads.closeModal();
-        Ads.toast(n ? 'Filled spend for ' + n + ' ad' + (n === 1 ? '' : 's') : 'No rows matched a tracked ad name (with a numeric spend)', !n);
-        Ads.go('tracking');
-      }
-    });
-  }
+  // real-people cost basis: Meta's billed link clicks when known
+  function detCosts(r) { return costsFrom(r.metaClicks != null ? r.metaClicks : r.clicks, r.views, r.outs, r.spend); }
+  // (the Live Tracking spend-CSV importer is gone — dark-ad spend syncs
+  // exactly from Meta on every Sync now; outside-hub spend can still be
+  // typed into the Spend column by hand)
 
   /* ===================== CSV IMPORT ===================================== */
   // recognised Meta export headers → our metric keys

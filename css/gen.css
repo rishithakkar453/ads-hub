@@ -464,6 +464,11 @@ input[type="range"]::-moz-range-thumb {
 .igpost-row-state { flex: 0 0 auto; max-width: 22rem; font-size: 1.15rem; color: var(--muted); text-align: right; }
 .igpost-row-state a { color: var(--fg); }
 
+/* Live Tracking detail: the full ad above the funnel */
+.trk-det-ad { display: flex; justify-content: flex-start; background: #0c0c0f; border: 1px solid var(--line); border-radius: 0.9rem; padding: 0.8rem; }
+.trk-det-ad .cr-stage-scaler { flex: 0 0 auto; }
+.trk-det-cap { font-size: 1.12rem; line-height: 1.55; margin-top: 0.8rem; white-space: pre-wrap; max-height: 9rem; overflow-y: auto; }
+
 /* Scale-up picker: tick = keep, untick = pause */
 .scl-row { cursor: pointer; }
 .scl-row input[type=checkbox] { flex: 0 0 auto; width: 1.8rem; height: 1.8rem; accent-color: var(--accent, #ff7a3c); margin-right: 0.2rem; }

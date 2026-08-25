@@ -2180,7 +2180,9 @@ function trackStats(cb) {
               if (!a) return;
               if (ev.t === 'click') {
                 if (ev.bot) { a.botClicks = (a.botClicks || 0) + 1; }   // crawlers/prefetchers — counted separately, never as clicks
-                else { a.clicks++; bumpSrc(a, ev.s); }
+                // clicks do NOT feed bySrc: stealth machine hits survive the UA
+                // filter and would inflate it — sources count real page VIEWS
+                else { a.clicks++; }
               }
               else if (ev.t === 'view') { a.views++; if (ev.v) a.vids[ev.v] = 1; bumpSrc(a, ev.s); }
               // one honest heartbeat is 5s; cap at 10 so a spoofed beat can't
