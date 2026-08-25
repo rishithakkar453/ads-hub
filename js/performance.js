@@ -391,6 +391,78 @@ window.Ads = window.Ads || {};
     });
     return map;
   }
+  // adKey → every Meta ad id it has ever run as (live run + archived runs).
+  // The same creative re-posted in a later round is a NEW ad object on Meta,
+  // so its exact total spend = the sum across all of them — mirroring how the
+  // tracked link merges clicks per adKey. Scope defaults to every project.
+  function darkAdIdsByKey(projects) {
+    var map = {};   // adKey → [adId, …]
+    (projects || store.listProjects()).forEach(function (p) {
+      (p.rounds || []).forEach(function (r) {
+        var sets = [(r.dark && r.dark.ads) || {}].concat((r.darkRuns || []).map(function (dr) { return dr.ads || {}; }));
+        sets.forEach(function (set) {
+          Object.keys(set).forEach(function (k) {
+            var a = set[k];
+            if (!a || !a.adId) return;
+            if (!map[k]) map[k] = [];
+            if (map[k].indexOf(a.adId) < 0) map[k].push(a.adId);
+          });
+        });
+      });
+    });
+    return map;
+  }
+  // Spend column = EXACT Meta spend for every ad that ran as a dark ad: sum
+  // the synced per-ad spend across all its runs and write it into
+  // tracking.spend. Runs after every insights sync, so the API is the source
+  // of truth for these ads — a manual figure typed on a dark-run ad is
+  // replaced at the next sync. Ads that never ran as dark ads keep manual/CSV
+  // entry untouched. Unchanged values are skipped (each write commits the
+  // whole store — dozens of no-op commits per sync would jank).
+  function applyDarkSpend() {
+    var t = store.getTracking();
+    var by = (t.dark || {}).byId || {};
+    var cur = t.spend || {};
+    var ids = darkAdIdsByKey();
+    Object.keys(ids).forEach(function (k) {
+      var sum = 0, has = false;
+      ids[k].forEach(function (id) {
+        var m = by[id];
+        if (m && !m.error && m.spend != null) { sum += +m.spend; has = true; }
+      });
+      if (!has) return;
+      var next = Math.round(sum * 100) / 100;
+      if (util.num(cur[k]) !== next) store.setTrackSpend(k, next);
+    });
+  }
+  // pull Meta insights for many ad ids: the server endpoint caps one request
+  // at 60 ids, so batch and merge — then fold the exact spend into tracking.
+  // cb receives {ok, failed, total} so callers can report honestly. Entries
+  // whose /insights sub-call failed carry insightsError with all-null metrics
+  // — storing them would CLOBBER a previously good spend and shrink the sum,
+  // so they are rejected like error entries (last good stats stay).
+  function syncDarkInsights(ids, cb) {
+    var stats = { ok: 0, failed: 0, total: ids.length };
+    if (!ids.length) { if (cb) cb(stats); return; }
+    var chunks = [];
+    for (var i = 0; i < ids.length; i += 50) chunks.push(ids.slice(i, i + 50));
+    var done = 0;
+    chunks.forEach(function (chunk) {
+      ai().madsInsights(chunk).then(function (resp) {
+        var clean = {}, by = resp.byId || {};
+        Object.keys(by).forEach(function (id) {
+          if (by[id] && !by[id].error && !by[id].insightsError) clean[id] = by[id];
+        });
+        var n = Object.keys(clean).length;
+        stats.ok += n; stats.failed += chunk.length - n;
+        if (n) store.setTrackDark(clean);
+      }).catch(function () { stats.failed += chunk.length; }).then(function () {
+        // applyDarkSpend reads the MERGED store: fresh ids just synced, last
+        // good values for anything that failed — sums can never shrink
+        if (++done === chunks.length) { applyDarkSpend(); if (cb) cb(stats); }
+      });
+    });
+  }
   // one row per tracked ad: raw funnel + spend-derived cost efficiency
   function trackRows() {
     var t = store.getTracking(); var snap = t.snapshot; if (!snap || !snap.ads) return [];
@@ -549,9 +621,31 @@ window.Ads = window.Ads || {};
       var old = btn ? btn.innerHTML : '';
       if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Syncing…'; }
       syncTracking(function (err) {
-        if (btn) { btn.disabled = false; btn.innerHTML = old; }
-        if (err) { Ads.toast('Sync failed: ' + err.message, true); return; }
-        Ads.toast('Synced'); Ads.go('tracking');
+        if (err) {
+          if (btn) { btn.disabled = false; btn.innerHTML = old; }
+          Ads.toast('Sync failed: ' + err.message, true); return;
+        }
+        // also pull Meta insights for every dark ad ever run (all projects) —
+        // the Spend column then carries the EXACT amount from Meta, no CSV
+        var idMap = darkAdIdsByKey(), all = [];
+        Object.keys(idMap).forEach(function (k) {
+          idMap[k].forEach(function (id) { if (all.indexOf(id) < 0) all.push(id); });
+        });
+        // re-render only if the user is still HERE — this sync can take a
+        // while and must never yank them back from another view
+        function rerender() { if (document.getElementById('trk-sync') || document.getElementById('trk-sync-empty')) Ads.go('tracking'); }
+        if (!all.length) {
+          if (btn) { btn.disabled = false; btn.innerHTML = old; }
+          Ads.toast('Synced'); rerender(); return;
+        }
+        if (btn) btn.innerHTML = '<span class="spinner"></span> Spend from Meta (' + all.length + ' ads)…';
+        syncDarkInsights(all, function (st) {
+          if (btn) { btn.disabled = false; btn.innerHTML = old; }
+          if (!st.ok) Ads.toast('Synced — but Meta spend could not be fetched (token or connection?)', true);
+          else if (st.failed) Ads.toast('Synced — spend updated for ' + st.ok + ' of ' + st.total + ' ads (rest kept their last figure)');
+          else Ads.toast('Synced — spend filled from Meta');
+          rerender();
+        });
       });
     }
     var s1 = el.querySelector('#trk-sync'); if (s1) s1.addEventListener('click', function () { run(s1); });
@@ -625,8 +719,8 @@ window.Ads = window.Ads || {};
   function spendCsvModal(view) {
     Ads.modal({
       title: 'Import spend from a Meta CSV', wide: true,
-      body: '<p class="u-muted" style="margin-bottom:1.4rem">Export from Meta Ads Manager and paste it here. We match rows to your tracked ads by <strong>ad name</strong> and fill in the <strong>Amount spent</strong> — everything else keeps coming from the live tracker.</p>' +
-        '<div class="field"><label>Paste CSV</label><textarea class="textarea" id="trk-csv" style="min-height:10rem" placeholder="Ad name,Amount spent,...\nCumulus cloud storage · Image + Bar #1,42.10,..."></textarea></div>' +
+      body: '<p class="u-muted" style="margin-bottom:1.4rem"><strong>Dark ads don’t need this</strong> — Sync now fills their exact spend straight from Meta. This import is for money spent outside Ads Hub (manual boosts, campaigns made in Ads Manager): in <strong>Ads Manager → Ads tab → Export</strong>, export table data as .csv and paste it here. Rows match by <strong>ad name</strong> (an “[ad-…]” tag in the name matches exactly), rows for the same ad are summed, and the total fills <strong>Amount spent</strong>. A figure imported for a dark-run ad is replaced by the exact Meta number at the next sync.</p>' +
+        '<div class="field"><label>Paste CSV</label><textarea class="textarea" id="trk-csv" style="min-height:10rem" placeholder="Ad name,Amount spent (CAD),...\nBeta hook [ad-xxxxxxxx],42.10,..."></textarea></div>' +
         '<div id="trk-csv-out"></div>',
       foot: [{ label: 'Close', act: 'close', ghost: true }, { label: 'Match & fill', act: 'go', primary: true }],
       onAction: function (act, m) {
@@ -639,20 +733,37 @@ window.Ads = window.Ads || {};
         var lower = {}; Object.keys(rows[0]).forEach(function (h) { lower[h.toLowerCase().trim()] = h; });
         function findCol(keys) { for (var i = 0; i < keys.length; i++) if (lower[keys[i]]) return lower[keys[i]]; return null; }
         var nameCol = findCol(['ad name', 'ad', 'name', 'creative name']) || Object.keys(rows[0])[0];
+        // Meta writes the account currency into the header — "Amount spent
+        // (CAD)", "(EUR)" … — so fall back to a prefix match after exact ones
         var spendCol = findCol(CSV_MAP.spend);
+        if (!spendCol) Object.keys(lower).some(function (h) { if (h.indexOf('amount spent') === 0) { spendCol = lower[h]; return true; } return false; });
         if (!spendCol) { m.querySelector('#trk-csv-out').innerHTML = '<div class="notice warn">No “Amount spent” column found.</div>'; return; }
-        // tracked-ad names → adKey (from the last synced snapshot)
-        var byName = {}; trackRows().forEach(function (r) { byName[r.name.toLowerCase().trim()] = r.key; });
-        var n = 0;
+        // tracked-ad names → adKey (from the last synced snapshot); the
+        // [ad-…] tag match only accepts KEYS WE KNOW (tracked or dark-run) —
+        // a random bracketed token in an ad name must not invent store entries
+        var byName = {}, known = {};
+        trackRows().forEach(function (r) { byName[r.name.toLowerCase().trim()] = r.key; known[r.key] = 1; });
+        Object.keys(darkAdIdsByKey()).forEach(function (k) { known[k] = 1; });
+        // the same creative can appear as several rows (one per campaign it
+        // ran in) — its true total is the SUM, not whichever row came last
+        var sums = {};
         rows.forEach(function (row) {
-          var nm = String(row[nameCol] || '').trim().toLowerCase(); var key = byName[nm];
+          var nm = String(row[nameCol] || '').trim().toLowerCase();
+          // ads posted by Ads Hub are named "… [ad-xxxxx]" on Meta — that key
+          // is an exact, collision-proof match; plain name match is a fallback
+          var km = /\[(ad-[a-z0-9]+)\]/.exec(nm);
+          var key = (km && known[km[1]] ? km[1] : null) || byName[nm] ||
+            byName[nm.replace(/\s*\[ad-[a-z0-9]+\]\s*$/, '').trim()];   // tagged name, unknown tag → match the base name
           if (!key) return;
           // a blank / non-numeric "Amount spent" cell (common for paused or
           // zero-delivery ads) must NOT wipe spend the user already has — skip it
           var v = util.num(row[spendCol]);
           if (v == null) return;
-          store.setTrackSpend(key, v); n++;
+          sums[key] = (sums[key] || 0) + v;
         });
+        var keys = Object.keys(sums);
+        keys.forEach(function (key) { store.setTrackSpend(key, Math.round(sums[key] * 100) / 100); });
+        var n = keys.length;
         Ads.closeModal();
         Ads.toast(n ? 'Filled spend for ' + n + ' ad' + (n === 1 ? '' : 's') : 'No rows matched a tracked ad name (with a numeric spend)', !n);
         Ads.go('tracking');
@@ -663,7 +774,7 @@ window.Ads = window.Ads || {};
   /* ===================== CSV IMPORT ===================================== */
   // recognised Meta export headers → our metric keys
   var CSV_MAP = {
-    spend: ['amount spent', 'amount spent (usd)', 'spend', 'cost'],
+    spend: ['amount spent', 'amount spent (usd)', 'amount spent (cad)', 'spend', 'cost'],
     impressions: ['impressions'],
     reach: ['reach'],
     frequency: ['frequency'],
@@ -1094,15 +1205,11 @@ window.Ads = window.Ads || {};
             var g = r2.igPosts[k2]; if (g && g.id) ids.push(g.id);
           });
         });
+        // current run + every archived run — an old campaign may be ACTIVE
         var darkIds = [];
-        projRounds(store.getProject(p.id) || p).forEach(function (r2) {
-          // current run + every archived run — an old campaign may be ACTIVE
-          var sets = [(r2.dark && r2.dark.ads) || {}].concat((r2.darkRuns || []).map(function (dr) { return dr.ads || {}; }));
-          sets.forEach(function (set) {
-            Object.keys(set).forEach(function (k2) {
-              var d = set[k2]; if (d && d.adId && darkIds.indexOf(d.adId) < 0) darkIds.push(d.adId);
-            });
-          });
+        var dkMap = darkAdIdsByKey([store.getProject(p.id) || p]);
+        Object.keys(dkMap).forEach(function (k2) {
+          dkMap[k2].forEach(function (id2) { if (darkIds.indexOf(id2) < 0) darkIds.push(id2); });
         });
         var syncs = [];
         if (ids.length) syncs.push(ai().metaInsights(ids).then(function (resp) {
@@ -1110,11 +1217,7 @@ window.Ads = window.Ads || {};
           Object.keys(by).forEach(function (id) { if (by[id] && !by[id].error) clean[id] = by[id]; });
           if (Object.keys(clean).length) store.setTrackIG(clean);
         }).catch(function () {}));
-        if (darkIds.length) syncs.push(ai().madsInsights(darkIds).then(function (resp) {
-          var clean = {}, by = resp.byId || {};
-          Object.keys(by).forEach(function (id) { if (by[id] && !by[id].error) clean[id] = by[id]; });
-          if (Object.keys(clean).length) store.setTrackDark(clean);
-        }).catch(function () {}));
+        if (darkIds.length) syncs.push(new Promise(function (res) { syncDarkInsights(darkIds, res); }));
         if (!syncs.length) return Ads.go('rounds');
         Promise.all(syncs).then(function () { Ads.go('rounds'); });
       });
