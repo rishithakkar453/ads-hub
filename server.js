@@ -2592,7 +2592,7 @@ var server = http.createServer(function (req, res) {
       (function next() {
         if (i >= ids.length) return sendJSON(res, 200, { ok: true, byId: byId, at: new Date().toISOString() });
         var id = ids[i++];
-        fbRequest('GET', '/' + id, { fields: 'effective_status,name', access_token: tok }, function (serr, sj) {
+        fbRequest('GET', '/' + id, { fields: 'effective_status,name,creative{effective_instagram_media_id}', access_token: tok }, function (serr, sj) {
           if (serr) { byId[id] = { error: serr.message.slice(0, 200) }; return next(); }
           fbRequest('GET', '/' + id + '/insights', { fields: 'impressions,reach,clicks,ctr,spend,cpc', date_preset: 'maximum', access_token: tok }, function (ierr, ij) {
             var row = (ij && ij.data && ij.data[0]) || {};
@@ -2606,7 +2606,17 @@ var server = http.createServer(function (req, res) {
               cpc: row.cpc != null ? +(+row.cpc).toFixed(2) : null
             };
             if (ierr) byId[id].insightsError = ierr.message.slice(0, 150);
-            next();
+            // the dark post is a real (unlisted) IG post — pull its social side
+            var mid = sj.creative && sj.creative.effective_instagram_media_id;
+            if (!mid) return next();
+            fbRequest('GET', '/' + mid, { fields: 'like_count,comments_count,permalink', access_token: tok }, function (merr, mj) {
+              if (!merr && mj) {
+                byId[id].likes = mj.like_count != null ? +mj.like_count : null;
+                byId[id].comments = mj.comments_count != null ? +mj.comments_count : null;
+                byId[id].permalink = mj.permalink || '';
+              }
+              next();
+            });
           });
         });
       })();

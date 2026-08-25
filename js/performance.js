@@ -999,8 +999,12 @@ window.Ads = window.Ads || {};
             if (dkm.clicks != null) dbits.push(dkm.clicks + ' clicks');
             if (dkm.spend != null) dbits.push(dkm.spend + ' ' + esc((r.dark && r.dark.currency) || '') + ' spent');
             if (dkm.cpc != null) dbits.push(dkm.cpc + '/click');
+            if (dkm.likes != null) dbits.push('♥ ' + dkm.likes);
+            if (dkm.comments != null) dbits.push('💬 ' + dkm.comments);
           }
-          igLine += '<div class="rndp-ig">🌑 dark ad ' + (dbits.length ? '· ' + dbits.join(' · ') : '· created paused — stats after next sync') + '</div>';
+          igLine += '<div class="rndp-ig">🌑 ' +
+            (dkm && dkm.permalink ? '<a href="' + esc(dkm.permalink) + '" target="_blank" rel="noopener">dark ad on Instagram</a> ' : 'dark ad ') +
+            (dbits.length ? '· ' + dbits.join(' · ') : '· created paused — stats after next sync') + '</div>';
         }
         return '<div class="rndp-card">' +
           '<div class="rndp-thumb cr-stage-scaler" data-rt2="' + esc(k) + '"></div>' +
