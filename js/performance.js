@@ -504,7 +504,7 @@ window.Ads = window.Ads || {};
         '<td><div class="cr-cell">' + (matched ? '<div class="cr-thumb" data-thumb-ad="' + matched.id + '"></div>' : '<div class="cr-thumb trk-nothumb">' + icons().globe + '</div>') +
           '<div style="min-width:0"><div class="ac-name u-truncate">' + esc(r.name) + '</div>' +
           '<div class="u-faint" style="font-size:1.05rem">' + (r.page ? '/p/' + esc(r.page) : esc(r.headline)).slice(0, 60) +
-          (igLinks[r.key] ? ' · <a href="' + esc(igLinks[r.key].url) + '" target="_blank" rel="noopener" data-stop="1">' + esc(igLinks[r.key].lbl) + '</a>' : '') +
+          (igLinks[r.key] ? ' · <a href="' + esc(igLinks[r.key].url) + '" target="_blank" rel="noopener" referrerpolicy="no-referrer" data-stop="1">' + esc(igLinks[r.key].lbl) + '</a>' : '') +
           '</div></div></div></td>' +
         '<td class="trk-src">' + srcChips(r.bySrc) + '</td>' +
         '<td class="num">' + util.fmtNum(r.clicks, 0) + '</td>' +
@@ -1029,7 +1029,7 @@ window.Ads = window.Ads || {};
             if (dkm.comments != null) dbits.push('💬 ' + dkm.comments);
           }
           igLine += '<div class="rndp-ig">🌑 ' +
-            (dkm && dkm.permalink ? '<a href="' + esc(dkm.permalink) + '" target="_blank" rel="noopener" title="opens the ad’s real Instagram post — view while logged in as the account owner">dark ad on Instagram</a> ' : 'dark ad ') +
+            (dkm && dkm.permalink ? '<a href="' + esc(dkm.permalink) + '" target="_blank" rel="noopener" referrerpolicy="no-referrer" title="opens the ad’s real Instagram post — view while logged in as the account owner">dark ad on Instagram</a> ' : 'dark ad ') +
             (dbits.length ? '· ' + dbits.join(' · ') : '· created paused — stats after next sync') + '</div>';
         }
         return '<div class="rndp-card">' +
