@@ -379,13 +379,11 @@ window.Ads = window.Ads || {};
         Object.keys(r.igPosts || {}).forEach(function (k) {
           if (r.igPosts[k] && r.igPosts[k].permalink) map[k] = { url: r.igPosts[k].permalink, lbl: 'on Instagram ↗' };
         });
-        [r.dark].concat(r.darkRuns || []).forEach(function (d) {
-          if (!d) return;
-          Object.keys(d.ads || {}).forEach(function (k) {
-            var a = d.ads[k];
-            if (map[k] || !a || !a.adId) return;
-            if (dk[a.adId] && dk[a.adId].permalink) map[k] = { url: dk[a.adId].permalink, lbl: 'on Instagram ↗' };
-          });
+        // ONLY the live run — archived campaigns' post pages are dead
+        if (r.dark) Object.keys(r.dark.ads || {}).forEach(function (k) {
+          var a = r.dark.ads[k];
+          if (map[k] || !a || !a.adId) return;
+          if (dk[a.adId] && dk[a.adId].permalink) map[k] = { url: dk[a.adId].permalink, lbl: 'on Instagram ↗' };
         });
       });
     });
@@ -1009,8 +1007,9 @@ window.Ads = window.Ads || {};
             (bits.length ? ' · ' + bits.join(' · ') : ' · stats arrive on next sync') + '</div>';
         }
         var dk = (r.dark && r.dark.ads || {})[k];
-        if (!(dk && dk.adId)) {
-          // fall back to the newest archived run that has this ad
+        var dkCurrent = !!(dk && dk.adId);   // links only ever come from the LIVE run — archived campaigns' posts are dead pages
+        if (!dkCurrent) {
+          // fall back to the newest archived run that has this ad (stats only)
           for (var dri = (r.darkRuns || []).length - 1; dri >= 0; dri--) {
             var old = (r.darkRuns[dri].ads || {})[k];
             if (old && old.adId) { dk = old; break; }
@@ -1029,7 +1028,7 @@ window.Ads = window.Ads || {};
             if (dkm.comments != null) dbits.push('💬 ' + dkm.comments);
           }
           igLine += '<div class="rndp-ig">🌑 ' +
-            (dkm && dkm.permalink ? '<a href="' + esc(dkm.permalink) + '" target="_blank" rel="noopener" referrerpolicy="no-referrer" title="opens the ad’s real Instagram post — view while logged in as the account owner">dark ad on Instagram</a> ' : 'dark ad ') +
+            (dkCurrent && dkm && dkm.permalink ? '<a href="' + esc(dkm.permalink) + '" target="_blank" rel="noopener" referrerpolicy="no-referrer" title="opens the ad’s real Instagram post — view while logged in as the account owner">dark ad on Instagram</a> ' : 'dark ad ') +
             (dbits.length ? '· ' + dbits.join(' · ') : '· created paused — stats after next sync') + '</div>';
         }
         return '<div class="rndp-card">' +
@@ -1183,6 +1182,27 @@ window.Ads = window.Ads || {};
       });
     });
     bindPlanSection(el, p, selR ? [selR] : []);
+    // self-heal: if the LIVE run's ads have no synced permalink yet (stale or
+    // pre-permalink sync data), fetch insights for just those ads once and
+    // re-render — no manual Sync needed for the links to appear
+    var missing = [];
+    rounds.forEach(function (r2) {
+      Object.keys((r2.dark && r2.dark.ads) || {}).forEach(function (k2) {
+        var a2 = r2.dark.ads[k2];
+        if (a2 && a2.adId) {
+          var m2 = (t.dark && t.dark.byId || {})[a2.adId];
+          if (!m2 || !m2.permalink) missing.push(a2.adId);
+        }
+      });
+    });
+    if (missing.length && !window.__igHealDone) {
+      window.__igHealDone = true;
+      ai().madsInsights(missing).then(function (resp) {
+        var clean = {}, by = resp.byId || {};
+        Object.keys(by).forEach(function (id) { if (by[id] && !by[id].error) clean[id] = by[id]; });
+        if (Object.keys(clean).length) { store.setTrackDark(clean); Ads.go('rounds'); }
+      }).catch(function () {});
+    }
   }
 
   // One ZIP per round: every ad's creative (PNG / real MP4) plus a .txt twin
