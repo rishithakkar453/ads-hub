@@ -2034,7 +2034,7 @@ function trackStats(cb) {
               var a = map[k];
               var uniques = Object.keys(a.vids).length;
               out[k] = {
-                clicks: a.clicks, views: a.views, uniques: uniques,
+                clicks: a.clicks, botClicks: a.botClicks || 0, views: a.views, uniques: uniques,
                 seconds: a.seconds,
                 avgSeconds: a.views ? Math.round(a.seconds / Math.max(uniques, 1)) : 0,
                 outs: a.outs,
@@ -2059,7 +2059,10 @@ function trackStats(cb) {
             var byPg = ev.pg ? slot(pages, ev.pg) : null;
             [byAd, byPg].forEach(function (a) {
               if (!a) return;
-              if (ev.t === 'click') { a.clicks++; bumpSrc(a, ev.s); }
+              if (ev.t === 'click') {
+                if (ev.bot) { a.botClicks = (a.botClicks || 0) + 1; }   // crawlers/prefetchers — counted separately, never as clicks
+                else { a.clicks++; bumpSrc(a, ev.s); }
+              }
               else if (ev.t === 'view') { a.views++; if (ev.v) a.vids[ev.v] = 1; bumpSrc(a, ev.s); }
               // one honest heartbeat is 5s; cap at 10 so a spoofed beat can't
               // over-report dwell time (was 30 = a silent 6× inflation lever)
@@ -2104,7 +2107,13 @@ function handleTracking(req, res, pathname, parsed) {
     var entry = akey && trackManifest().ads[akey];
     if (!entry) return send(res, 404, 'Unknown link'), true;
     var src = cleanSrc(parsed.query.s);
-    trackLog({ t: 'click', k: akey, pg: entry.slug, s: src, ref: hostOf(req.headers.referer), ua: uaClass(req.headers['user-agent']) });
+    // machines hammer ad links: Meta's ad-review crawlers + link scanners
+    // (facebookexternalhit, meta-externalagent…) and in-app PREFETCHES that
+    // fire the moment an ad renders. Tag them so "clicks" means humans.
+    var rawUA = String(req.headers['user-agent'] || '');
+    var isBot = /facebookexternalhit|meta-externalagent|facebookcatalog|bot|crawler|spider|preview|curl|wget|python|axios|headless/i.test(rawUA) ||
+      /prefetch|preview/i.test(String(req.headers['sec-purpose'] || req.headers.purpose || req.headers['x-purpose'] || ''));
+    trackLog({ t: 'click', k: akey, pg: entry.slug, s: src, ref: hostOf(req.headers.referer), ua: uaClass(req.headers['user-agent']), bot: isBot ? 1 : 0 });
     var loc = '/p/' + entry.slug + '/?aid=' + akey + (src ? '&s=' + src : '');
     return send(res, 302, 'Redirecting…', { Location: loc, 'Cache-Control': 'no-store' }), true;
   }
