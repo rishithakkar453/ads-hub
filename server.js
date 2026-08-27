@@ -3040,6 +3040,26 @@ var server = http.createServer(function (req, res) {
   // The per-ad spend ceiling for a round. GET reads the authoritative value
   // (the browser's copy can be stale); POST sets it — or clears it with 0 —
   // and sweeps straight away so anything already over the line pauses now.
+  // The authoritative run record for a round. The browser's copy can fall
+  // behind whenever the structure changes outside it (a restructure, the
+  // sibling instance, the cap watchdog pausing ads) — the round page adopts
+  // this on sync, archiving whatever it held so no history is ever lost.
+  if (pathname === '/api/mads/run' && req.method === 'GET') {
+    if (!requireAppHeader(req, res)) return;
+    var ridR = String(parsed.query.roundId || '');
+    var recR2 = ridR ? freshMadsRuns()[ridR] : null;
+    if (!recR2) return sendJSON(res, 404, { error: 'unknown_round' });
+    return sendJSON(res, 200, {
+      ok: true,
+      run: {
+        campaignId: recR2.campaignId || '', adsetId: recR2.adsetId || '', split: !!recR2.split,
+        ads: recR2.ads || {}, adCap: parseFloat(recR2.adCap) || 0,
+        budget: recR2.budgetMinor != null ? recR2.budgetMinor / 100 : null,
+        endTime: recR2.endTime || '', at: recR2.at || 0
+      },
+      prevRuns: Array.isArray(recR2.prevRuns) ? recR2.prevRuns : []
+    });
+  }
   if (pathname === '/api/mads/cap' && req.method === 'GET') {
     if (!requireAppHeader(req, res)) return;
     var ridG = String(parsed.query.roundId || '');

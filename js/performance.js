@@ -422,6 +422,35 @@ window.Ads = window.Ads || {};
     });
     return map;
   }
+  // ALL-TIME Meta numbers for one creative in one round: a creative can run as
+  // several Meta ad objects over time (a restructure or a re-run makes new
+  // ads pointing at the SAME Instagram post). Delivery counters are per ad
+  // object so they SUM; likes/comments belong to the shared post, so they are
+  // taken once (max) — summing them would count the same hearts twice.
+  function darkAgg(r, k, t) {
+    var by = (t.dark || {}).byId || {};
+    var live = (r.dark && r.dark.ads || {})[k];
+    var sets = [(r.dark && r.dark.ads) || {}].concat((r.darkRuns || []).map(function (dr) { return dr.ads || {}; }));
+    var seen = {}, out = { runs: 0, impressions: null, clicks: null, spend: null, likes: null, comments: null, permalink: '', status: '', anyLive: !!(live && live.adId) };
+    sets.forEach(function (set, si) {
+      var a = set[k];
+      if (!a || !a.adId || seen[a.adId]) return;
+      seen[a.adId] = 1;
+      var m = by[a.adId];
+      out.runs++;
+      if (!m || m.error) return;
+      if (m.impressions != null) out.impressions = (out.impressions || 0) + m.impressions;
+      var lc = m.linkClicks != null ? m.linkClicks : m.clicks;
+      if (lc != null) out.clicks = (out.clicks || 0) + lc;
+      if (m.spend != null) out.spend = Math.round(((out.spend || 0) + m.spend) * 100) / 100;
+      if (m.likes != null) out.likes = Math.max(out.likes || 0, m.likes);
+      if (m.comments != null) out.comments = Math.max(out.comments || 0, m.comments);
+      if (!out.permalink && m.permalink) out.permalink = m.permalink;
+      if (si === 0 && m.status) out.status = m.status;   // status only means anything for the live run
+    });
+    if (live && live.paused) out.status = 'PAUSED';
+    return out;
+  }
   // Spend column = EXACT Meta spend for every ad that ran as a dark ad: sum
   // the synced per-ad spend across all its runs and write it into
   // tracking.spend. Runs after every insights sync, so the API is the source
@@ -444,6 +473,52 @@ window.Ads = window.Ads || {};
       var next = Math.round(sum * 100) / 100;
       if (util.num(cur[k]) !== next) store.setTrackSpend(k, next);
     });
+  }
+  // Adopt the server's authoritative run record for every round of a project.
+  // When the structure changed server-side (restructure, re-run), the record
+  // this browser holds is archived into darkRuns FIRST — so all-time stats
+  // keep aggregating across both — and the new one becomes current.
+  function adoptServerRuns(pid, cb) {
+    var p = store.getProject(pid);
+    if (!p) { if (cb) cb(); return; }
+    var rounds = projRounds(p).filter(function (r) { return r.dark || r.darkRuns; });
+    if (!rounds.length) { if (cb) cb(); return; }
+    var i = 0;
+    (function next() {
+      if (i >= rounds.length) { if (cb) cb(); return; }
+      var r = rounds[i++];
+      fetch('/api/mads/run?roundId=' + encodeURIComponent(r.id), { headers: { 'X-Ads-Hub': '1' } })
+        .then(function (rr) { return rr.ok ? rr.json() : null; })
+        .then(function (b) {
+          if (!b || !b.ok || !b.run || !b.run.campaignId) return;
+          var pF = store.getProject(pid);
+          var rF = (pF && projRounds(pF).filter(function (x) { return x.id === r.id; })[0]);
+          if (!rF) return;
+          var cur = rF.dark;
+          if (cur && cur.campaignId === b.run.campaignId) {
+            // same campaign — just refresh the per-ad map, cap and flags
+            var same = JSON.parse(JSON.stringify(cur));
+            same.ads = b.run.ads; same.split = b.run.split;
+            if (b.run.adCap) same.adCap = b.run.adCap; else delete same.adCap;
+            return updateRound(pid, r.id, { dark: same });
+          }
+          // structure changed: archive what we had, adopt the server's
+          var runsArr = (rF.darkRuns || []).slice();
+          if (cur && cur.campaignId && !runsArr.some(function (x) { return x.campaignId === cur.campaignId; })) runsArr.push(cur);
+          updateRound(pid, r.id, {
+            dark: {
+              campaignId: b.run.campaignId, adsetId: b.run.adsetId, split: b.run.split,
+              budget: b.run.budget != null ? b.run.budget : (cur && cur.budget) || null,
+              currency: (cur && cur.currency) || 'CAD',
+              endTime: b.run.endTime || '', adCap: b.run.adCap || undefined,
+              at: util.nowISO(), ads: b.run.ads
+            },
+            darkRuns: runsArr
+          });
+        })
+        .catch(function () {})
+        .then(function () { next(); });
+    })();
   }
   // pull Meta insights for many ad ids: the server endpoint caps one request
   // at 60 ids, so batch and merge — then fold the exact spend into tracking.
@@ -1123,39 +1198,22 @@ window.Ads = window.Ads || {};
         if (sp != null) { tot.spend += sp; tot.spendSet = true; }
         var outRate = st.views ? Math.round((st.outs || 0) / st.views * 100) : null;
         var igLine = '';   // (organic 📸 line removed by request — dark ads are the workflow)
-        var dk = (r.dark && r.dark.ads || {})[k];
-        var dkCurrent = !!(dk && dk.adId);   // links only ever come from the LIVE run — archived campaigns' posts are dead pages
-        if (!dkCurrent) {
-          // fall back to the newest archived run that has this ad (stats only)
-          for (var dri = (r.darkRuns || []).length - 1; dri >= 0; dri--) {
-            var old = (r.darkRuns[dri].ads || {})[k];
-            if (old && old.adId) { dk = old; break; }
-          }
-        }
-        if (dk && dk.adId) {
-          var dkm = t.dark && t.dark.byId && t.dark.byId[dk.adId];
+        // ALL-TIME across every campaign this creative has run in
+        var agg = darkAgg(r, k, t);
+        if (agg.runs) {
           var dbits = [];
-          if (dkm && !dkm.error) {
-            if (dkm.status) dbits.push(dkm.status === 'PAUSED' ? 'paused' : dkm.status.toLowerCase());
-            if (dkm.impressions != null) dbits.push(dkm.impressions + ' impr');
-            // linkClicks = what Meta billed (real people); clicks = "clicks
-            // (all)" incl. profile taps — only shown until the next sync
-            if (dkm.linkClicks != null) dbits.push(dkm.linkClicks + ' clicks');
-            else if (dkm.clicks != null) dbits.push(dkm.clicks + ' clicks');
-            if (dkm.spend != null) dbits.push(dkm.spend + ' ' + esc((r.dark && r.dark.currency) || '') + ' spent');
-            if (dkm.cpc != null) dbits.push(dkm.cpc + '/click');
-            if (dkm.likes != null) dbits.push('♥ ' + dkm.likes);
-            if (dkm.comments != null) dbits.push('💬 ' + dkm.comments);
-          }
-          // a Scale-up pause shows instantly, before the next sync catches up
-          // (and the stale pre-pause status must not sit beside it)
-          if (dk.paused) {
-            if (dkm && dkm.status && dkm.status !== 'PAUSED') dbits.shift();
-            if (dbits.indexOf('paused') < 0) dbits.unshift('paused');
-          }
+          if (agg.status) dbits.push(agg.status === 'PAUSED' ? 'paused' : agg.status.toLowerCase());
+          if (agg.impressions != null) dbits.push(util.fmtNum(agg.impressions, 0) + ' impr');
+          if (agg.clicks != null) dbits.push(util.fmtNum(agg.clicks, 0) + ' clicks');
+          if (agg.spend != null) dbits.push(agg.spend + ' ' + esc((r.dark && r.dark.currency) || '') + ' spent');
+          if (agg.spend != null && agg.clicks) dbits.push((Math.round(agg.spend / agg.clicks * 100) / 100) + '/click');
+          if (agg.likes != null) dbits.push('♥ ' + agg.likes);
+          if (agg.comments != null) dbits.push('💬 ' + agg.comments);
           igLine += '<div class="rndp-ig">🌑 ' +
-            (dkCurrent && dkm && dkm.permalink ? '<a href="' + esc(dkm.permalink) + '" target="_blank" rel="noopener" referrerpolicy="no-referrer" title="opens the ad’s real Instagram post — view while logged in as the account owner">dark ad on Instagram</a> ' : 'dark ad ') +
-            (dbits.length ? '· ' + dbits.join(' · ') : '· created paused — stats after next sync') + '</div>';
+            (agg.permalink ? '<a href="' + esc(agg.permalink) + '" target="_blank" rel="noopener" referrerpolicy="no-referrer" title="opens the ad’s real Instagram post — view while logged in as the account owner">dark ad on Instagram</a> ' : 'dark ad ') +
+            (dbits.length ? '· ' + dbits.join(' · ') : '· created paused — stats after next sync') +
+            (agg.runs > 1 ? ' <span class="u-faint" title="this creative has run as ' + agg.runs + ' Meta ads — the same Instagram post throughout; delivery numbers are added up">(all-time, ' + agg.runs + ' runs)</span>' : '') +
+            '</div>';
         }
         return '<div class="rndp-card">' +
           '<div class="rndp-thumb cr-stage-scaler" data-rt2="' + esc(k) + '"></div>' +
@@ -1222,6 +1280,9 @@ window.Ads = window.Ads || {};
       syncBtn.disabled = true; syncBtn.innerHTML = '<span class="spinner"></span> Syncing…';
       syncTracking(function (err) {
         if (err) Ads.toast('Sync failed: ' + err.message, true);
+        // pick up any server-side structure change FIRST, so the ad ids we
+        // then fetch insights for include both the new and the archived runs
+        adoptServerRuns(p.id, function () {
         // also pull Instagram per-post insights for everything this project posted
         var ids = [];
         projRounds(store.getProject(p.id) || p).forEach(function (r2) {
@@ -1244,6 +1305,7 @@ window.Ads = window.Ads || {};
         if (darkIds.length) syncs.push(new Promise(function (res) { syncDarkInsights(darkIds, res); }));
         if (!syncs.length) return Ads.go('rounds');
         Promise.all(syncs).then(function () { Ads.go('rounds'); });
+        });
       });
     });
     el.querySelectorAll('[data-copy]').forEach(function (b) {
