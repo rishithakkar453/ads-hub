@@ -1178,8 +1178,10 @@ window.Ads = window.Ads || {};
           '</div></div>';
       }).join('');
       var hasLiveDark = !!(r.dark && r.dark.ads && Object.keys(r.dark.ads).some(function (k4) { return r.dark.ads[k4] && r.dark.ads[k4].adId; }));
+      var capOn = r.dark && parseFloat(r.dark.adCap) > 0 ? parseFloat(r.dark.adCap) : 0;
       return '<div class="view-section"><div class="section-head"><h2>' + esc(r.name) + '</h2>' +
-        '<span class="section-action"><span class="u-label">' + r.adKeys.length + ' ads · ' + tot.clicks + ' clicks · ' + tot.views + ' visits · ' + tot.outs + ' to site' + (tot.spendSet ? ' · ' + money(tot.spend) + ' spent' : '') + '</span>' +
+        '<span class="section-action"><span class="u-label">' + r.adKeys.length + ' ads · ' + tot.clicks + ' clicks · ' + tot.views + ' visits · ' + tot.outs + ' to site' + (tot.spendSet ? ' · ' + money(tot.spend) + ' spent' : '') +
+          (capOn ? ' · <span title="Ads Hub pauses any ad that reaches this">⛔ ' + capOn + ' ' + esc((r.dark && r.dark.currency) || sym()) + '/ad ceiling</span>' : '') + '</span>' +
         (hasLiveDark ? '<button class="btn is-ghost is-sm" data-round-scale="' + esc(r.id) + '" title="pause the losers and put more money on the winners — no new posts">📈 Scale up</button>' : '') +
         '<button class="btn is-ghost is-sm" data-round-dl="' + esc(r.id) + '">⬇ Download all</button>' +
         '<button class="btn is-ghost is-sm" data-round-edit="' + esc(r.id) + '">Edit ads</button>' +
@@ -1969,14 +1971,17 @@ window.Ads = window.Ads || {};
       body: '<p class="u-muted">Keep the winners <strong>ticked</strong> — everything unticked gets <strong>paused</strong>. The money you add goes onto the <strong>same campaign</strong>, so Meta splits it across the ads that stay on. <strong>No new posts are created</strong> — the ads keep their Instagram post, likes and learning.</p>' +
         '<div class="pp-quick">' +
           '<div class="field" style="max-width:16rem;margin:0"><label>ADD budget (' + esc(cur) + ')</label><input class="input" id="scl-add" inputmode="decimal" placeholder="0"></div>' +
-          '<div class="field" style="max-width:10rem;margin:0"><label>More days</label><input class="input" id="scl-days" inputmode="numeric" value="3"></div>' +
+          '<div class="field" style="max-width:10rem;margin:0"><label>More days</label><input class="input" id="scl-days" inputmode="numeric" placeholder="0" value=""></div>' +
+          '<div class="field" style="max-width:15rem;margin:0"><label>Stop each ad at (' + esc(cur) + ')</label>' +
+            '<input class="input" id="scl-cap" inputmode="decimal" placeholder="none" value="' + esc(run.adCap || '') + '"></div>' +
           '<span class="u-label" id="scl-count" style="align-self:flex-end;padding-bottom:0.8rem"></span>' +
           '<span style="margin-left:auto;align-self:flex-end;display:flex;gap:0.6rem;padding-bottom:0.4rem">' +
             '<button class="btn is-ghost is-sm" id="scl-all">Keep all</button>' +
             '<button class="btn is-ghost is-sm" id="scl-none">Keep none</button>' +
           '</span>' +
         '</div>' +
-        '<p class="u-faint" id="scl-explain" style="margin:0.4rem 0 1rem;font-size:1.18rem"></p>' +
+        '<p class="u-faint" id="scl-explain" style="margin:0.4rem 0 0.5rem;font-size:1.18rem"></p>' +
+        '<p class="u-faint" id="scl-cap-explain" style="margin:0 0 1rem;font-size:1.18rem"></p>' +
         '<div class="igpost-list">' + rows + '</div>' +
         '<div class="gh-status" id="scl-status"></div>',
       foot: [
@@ -1992,7 +1997,7 @@ window.Ads = window.Ads || {};
         function itemFor(k5) { return items.filter(function (x) { return x.key === k5; })[0]; }
         // what runs must be exactly what was confirmed — any edit disarms
         function disarm() {
-          m.__sclArmed = false; m.__sclIdem = '';
+          m.__sclArmed = false;   // the idem is derived from the intent at confirm time
           var g = m.querySelector('[data-mact="go"]');
           if (g && !g.disabled) g.textContent = 'Apply';
         }
@@ -2025,6 +2030,15 @@ window.Ads = window.Ads || {};
                   ? 'Each kept ad has its OWN budget — this adds ' + addPer + ' ' + esc(cur) + ' to every one of them, so the split stays even.'
                   : 'Meta splits the remaining money across the ' + c.keepKeys.length + ' kept ad' + (c.keepKeys.length === 1 ? '' : 's') + ' (≈ ' + perAd + ' ' + esc(cur) + ' each if equal — better performers get more).')
               : '');
+          var capV = parseFloat(m.querySelector('#scl-cap').value);
+          var capEx = m.querySelector('#scl-cap-explain');
+          if (capEx) {
+            var overCount = capV > 0 ? items.filter(function (x) { return !x.paused && (x.m.spend != null) && x.m.spend >= capV; }).length : 0;
+            capEx.innerHTML = capV > 0
+              ? '⛔ <strong>Ads Hub pauses any ad that reaches ' + capV + ' ' + esc(cur) + '.</strong> It checks every few minutes, and Meta’s spend figures run up to ~15 minutes behind, so an ad typically stops a little past ' + capV + ' rather than exactly on it — treat it as “about ' + capV + '”, not a hard wall.' +
+                (overCount ? ' <strong>' + overCount + ' ad' + (overCount === 1 ? ' is' : 's are') + ' already past it and will be paused as soon as you confirm.</strong>' : '')
+              : 'No per-ad ceiling — Meta decides how much of the budget each ad gets (it concentrates on early winners).';
+          }
         }
         boxes().forEach(function (b) {
           b.addEventListener('change', function () {
@@ -2033,7 +2047,7 @@ window.Ads = window.Ads || {};
             disarm(); updateExplain();
           });
         });
-        ['scl-add', 'scl-days'].forEach(function (id) {
+        ['scl-add', 'scl-days', 'scl-cap'].forEach(function (id) {
           m.querySelector('#' + id).addEventListener('input', function () { disarm(); updateExplain(); });
         });
         m.querySelector('#scl-all').addEventListener('click', function () {
@@ -2049,6 +2063,18 @@ window.Ads = window.Ads || {};
           disarm(); updateExplain();
         });
         updateExplain();
+        // the ceiling lives on the server — show the authoritative value, not
+        // this browser's possibly-stale copy
+        fetch('/api/mads/cap?roundId=' + encodeURIComponent(rid), { headers: { 'X-Ads-Hub': '1' } })
+          .then(function (rr) { return rr.json(); })
+          .then(function (b) {
+            if (!b || !b.ok) return;
+            m.__capServer = b.cap || 0;
+            var f = m.querySelector('#scl-cap');
+            if (f && document.activeElement !== f) f.value = b.cap ? String(b.cap) : '';
+            updateExplain();
+          })
+          .catch(function () {});
       },
       onAction: function (act, m) {
         if (act === 'cancel') return Ads.closeModal();
@@ -2056,22 +2082,79 @@ window.Ads = window.Ads || {};
         var cc = m.__sclCalc();
         var add = parseFloat(m.querySelector('#scl-add').value) || 0;
         var d = Math.min(90, Math.max(0, parseInt(m.querySelector('#scl-days').value, 10) || 0));
+        // plain numbers only — "1,000" must never silently become a $1 ceiling
+        var capRaw = m.querySelector('#scl-cap').value.trim().replace(/\s+/g, '');
+        var capV;
+        if (capRaw === '' || capRaw === '0') capV = 0;
+        else if (!/^[0-9]+(\.[0-9]+)?$/.test(capRaw)) return Ads.toast('Write the ceiling as a plain number, e.g. 40 or 40.50 (no commas)', true);
+        else capV = parseFloat(capRaw);
+        var capWas = parseFloat(m.__capServer != null ? m.__capServer : run.adCap) || 0;
+        var capChanged = capV !== capWas;
+        var hasScaleWork = !!(add || d || cc.pauseN);
         if (add < 0) return Ads.toast('The added budget can’t be negative', true);
         if (add > 0 && !cc.keepKeys.length) return Ads.toast('Adding money with every ad paused would spend on nothing — keep at least one', true);
-        if (!add && !d && !cc.pauseN) return Ads.toast('Nothing to change — untick ads to pause them, or add money/days', true);
+        if (!hasScaleWork && !capChanged) return Ads.toast('Nothing to change — untick ads to pause them, add money/days, or set a per-ad ceiling', true);
         var goBtn = m.querySelector('[data-mact="go"]');
         if (!m.__sclArmed) {
           m.__sclArmed = true;
-          // one idem per confirmed intent: a Retry after an error reuses it so
-          // the same money can never be added twice
-          if (!m.__sclIdem) m.__sclIdem = 'scale:' + rid + ':' + Date.now().toString(36);
+          // the key IS the intent: retrying the same confirmed change reuses
+          // it (so money can never be added twice), while genuinely changing
+          // the amount, days or selection is a new intent that does apply
+          m.__sclIdem = 'scale:' + rid + ':' + add + ':' + d + ':' + cc.keepKeys.slice().sort().join(',');
+          if (m.__sclIdem.length > 110) m.__sclIdem = m.__sclIdem.slice(0, 60) + ':' + cc.keepKeys.length + ':' + add + ':' + d;
           if (goBtn) goBtn.textContent = '⚠ LIVE campaign: pause ' + cc.pauseN + ' · keep ' + cc.keepKeys.length +
             (add > 0 ? ' · +' + add + ' ' + cur + ' (new cap ≈ ' + (Math.round((curBudget + add) * 100) / 100) + ' ' + cur + ')' : '') +
-            (d ? ' · +' + d + ' day' + (d === 1 ? '' : 's') : '') + ' — press again to confirm';
+            (d ? ' · +' + d + ' day' + (d === 1 ? '' : 's') : '') +
+            (capChanged ? (capV
+              ? ' · ⛔ stop each ad at ' + capV + ' ' + cur +
+                (function () {
+                  var n2 = items.filter(function (x) { return !x.paused && x.m.spend != null && x.m.spend >= capV; }).length;
+                  return n2 ? ' (pauses ' + n2 + ' more now)' : '';
+                })()
+              : ' · remove the per-ad ceiling') : '') +
+            ' — press again to confirm';
           return;
         }
         if (goBtn) { goBtn.disabled = true; goBtn.innerHTML = '<span class="spinner"></span> Working…'; }
         var status = m.querySelector('#scl-status');
+        // the ceiling is applied AFTER the scale work (the server sweeps
+        // immediately, so anything already over the line pauses right away)
+        function applyCap(prefix) {
+          if (!capChanged) { finish(prefix); return; }
+          if (status) status.innerHTML = '<span class="spinner"></span> ' + (capV ? 'setting the per-ad ceiling…' : 'removing the per-ad ceiling…');
+          ai().madsCap(rid, capV).then(function (cr) {
+            var pF2 = store.getProject(pid);
+            var rF2 = (pF2 && projRounds(pF2).filter(function (x) { return x.id === rid; })[0]) || r;
+            var d3 = JSON.parse(JSON.stringify(rF2.dark || run));
+            if (!d3.ads) d3.ads = {};
+            if (capV) d3.adCap = capV; else delete d3.adCap;
+            var swept = cr.swept || null;
+            (swept && swept.paused || []).forEach(function (p3) { if (d3.ads[p3.adKey]) d3.ads[p3.adKey].paused = true; });
+            updateRound(pid, rid, { dark: d3 });
+            m.__capServer = capV;
+            var hitN = (swept && swept.paused || []).length;
+            var swErr = swept && swept.errors ? Object.keys(swept.errors).length : 0;
+            var tail;
+            if (!capV) tail = ' · per-ad ceiling removed';
+            else if (cr.pending || !swept || swept.skipped) tail = ' · ⛔ ceiling ' + capV + ' ' + esc(cur) + '/ad saved — the watchdog is applying it now';
+            else tail = ' · ⛔ ceiling ' + capV + ' ' + esc(cur) + '/ad' + (hitN ? ' (' + hitN + ' already there — paused now)' : ' (nothing over it yet)') +
+              (swErr ? ' · <span style="color:var(--bad,#e5704f)">' + swErr + ' could not be paused — check Ads Manager</span>' : '');
+            finish(prefix + tail);
+          }).catch(function (e) {
+            // a failed ceiling must stay retryable, not look finished
+            if (status) status.innerHTML = prefix + ' · <span style="color:var(--bad,#e5704f)">✗ ceiling not set: ' + esc((e.message || '').slice(0, 140)) + '</span>';
+            if (goBtn) { goBtn.disabled = false; goBtn.textContent = 'Retry the ceiling'; m.__sclArmed = false; }
+            Ads.go('rounds');
+          });
+        }
+        function finish(html) {
+          if (status) status.innerHTML = html;
+          if (goBtn) { goBtn.textContent = 'Done'; goBtn.disabled = false; goBtn.setAttribute('data-mact', 'cancel'); }
+          Ads.go('rounds');
+        }
+        if (!hasScaleWork) {   // ceiling-only change: no scale call at all
+          return applyCap('✓');
+        }
         ai().madsScale({ roundId: rid, keep: cc.keepKeys, addBudget: add, days: d, idem: m.__sclIdem },
           function (note) { if (status) status.innerHTML = '<span class="spinner"></span> ' + esc(note); })
           .then(function (result) {
@@ -2097,13 +2180,11 @@ window.Ads = window.Ads || {};
             var errN = Object.keys(result.pauseErrors || {}).length + Object.keys(result.updateErrors || {}).length;
             var capBit = result.newBudget != null ? ' · hard cap ' + result.newBudget + ' ' + esc(cur)
               : result.addedTotal ? ' · +' + result.addedTotal + ' ' + esc(cur) + ' added across the kept ads’ own budgets' : '';
-            if (status) status.innerHTML = '✓ ' + (result.paused || []).length + ' paused · ' + result.kept + ' kept' + capBit +
+            Ads.toast('Round updated — same ads, no new posts');
+            applyCap('✓ ' + (result.paused || []).length + ' paused · ' + result.kept + ' kept' + capBit +
               (endStr2 ? ' · runs until ' + endStr2 : '') +
               (errN ? ' · <span style="color:var(--bad,#e5704f)">' + errN + ' change' + (errN === 1 ? '' : 's') + ' failed — finish in <a href="https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=' + esc(actNum) + '" target="_blank" rel="noopener">Ads Manager</a></span>' : '') +
-              ((result.keptButPaused || []).length ? ' · note: ' + result.keptButPaused.length + ' kept ad' + (result.keptButPaused.length === 1 ? ' is' : 's are') + ' still paused from before — switch them on in <a href="https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=' + esc(actNum) + '" target="_blank" rel="noopener">Ads Manager</a> if you want them back' : '');
-            if (goBtn) { goBtn.textContent = 'Done'; goBtn.disabled = false; goBtn.setAttribute('data-mact', 'cancel'); }
-            Ads.toast('Round scaled — same ads, more money behind the winners');
-            Ads.go('rounds');
+              ((result.keptButPaused || []).length ? ' · note: ' + result.keptButPaused.length + ' kept ad' + (result.keptButPaused.length === 1 ? ' is' : 's are') + ' still paused from before — switch them on in <a href="https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=' + esc(actNum) + '" target="_blank" rel="noopener">Ads Manager</a> if you want them back' : ''));
           })
           .catch(function (e) {
             if (status) status.innerHTML = '<span style="color:var(--bad,#e5704f)">✗ ' + esc((e.message || 'failed').slice(0, 200)) + '</span>';

@@ -1335,6 +1335,10 @@ function madsDarkRun(jobId, input) {
       // a scale's paid-record survives resumes of the SAME campaign only —
       // a fresh campaign must never inherit another campaign's idem ledger
       lastScale: (prev && prev.campaignId === out.campaignId) ? prev.lastScale : undefined,
+      // the per-ad ceiling is the user's standing instruction for this round —
+      // it must survive a resume or a re-run, or the guarantee quietly lapses
+      adCap: prev ? prev.adCap : undefined,
+      capSweptAt: (prev && prev.campaignId === out.campaignId) ? prev.capSweptAt : 0,
       at: Date.now(), state: state
     };
     saveMadsRuns();
@@ -1798,6 +1802,149 @@ function madsScaleRun(jobId, input) {
       })();
     })();
   }
+}
+
+// PER-AD SPEND CEILING. Meta has no per-ad budget when several ads share one
+// ad set (budgets live on the ad set), so a hard cap is impossible there —
+// this enforces one by WATCHING: every few minutes it reads each capped
+// round's per-ad spend and pauses any ad that reached the ceiling. It only
+// ever pauses; it can never start, resume, or raise anything. Meta's spend
+// reporting lags ~15 minutes, so an ad can overshoot slightly before the
+// pause lands — that is inherent to the platform, not a bug here.
+var MADS_CAP_EVERY = 5 * 60 * 1000;      // a round is swept at most this often
+var MADS_CAP_LATCH = 10 * 60 * 1000;     // a stuck sweep releases itself after this
+var capSweepStartedAt = 0;
+// Surgical ledger write: merge the sibling instance's changes from disk FIRST,
+// then apply one field change to the fresh record. Never writes a record the
+// sweep has been holding across async gaps (that would revert the other
+// instance's work, or a cap the user just changed).
+function capLedgerEdit(rid, mutate) {
+  var runs = freshMadsRuns();
+  var r = runs[rid];
+  if (!r) return null;
+  mutate(r);
+  r.at = Date.now();
+  madsRuns[rid] = r;
+  saveMadsRuns();
+  return r;
+}
+// Every ad of a campaign with its OWN status and lifetime spend, following
+// Meta's paging so a big campaign can't fall off the end of page one.
+function capReadAds(campaignId, tok, cb) {
+  var all = {};
+  (function page(after, guard) {
+    if (guard > 20) return cb(null, all);
+    var params = { fields: 'id,status,effective_status,insights.date_preset(maximum){spend}', limit: 100, access_token: tok };
+    if (after) params.after = after;
+    fbRequest('GET', '/' + campaignId + '/ads', params, function (err, j) {
+      if (err) return cb(err);
+      (j && j.data || []).forEach(function (ad) {
+        if (!ad.id) return;
+        var row = ad.insights && ad.insights.data && ad.insights.data[0];
+        all[String(ad.id)] = { status: String(ad.status || ''), spend: row ? (parseFloat(row.spend) || 0) : 0 };
+      });
+      var next = j && j.paging && j.paging.cursors && j.paging.cursors.after;
+      if (next && j.paging.next) return page(next, (guard || 0) + 1);
+      cb(null, all);
+    });
+  })('', 0);
+}
+// Enforce per-ad spend ceilings. Meta's own ad status is the ground truth —
+// an ad someone resumed in Ads Manager is protected again, and our records
+// are corrected to match. This can only ever PAUSE.
+function madsCapSweep(only, cb) {
+  var tok = effectiveMadsToken();
+  var out = { rounds: 0, checked: 0, paused: [], errors: {}, skipped: '' };
+  var settled = false;
+  function finish(o) {
+    if (settled) return;
+    settled = true;
+    capSweepStartedAt = 0;             // released on EVERY exit, errors included
+    if (cb) cb(null, o || out);
+  }
+  // a callback that throws must not strand the latch forever
+  function guard(fn) {
+    return function () {
+      try { fn.apply(null, arguments); }
+      catch (e) { console.log('[mads] cap sweep aborted: ' + (e && e.message)); out.errors.sweep = String(e && e.message || e).slice(0, 150); finish(); }
+    };
+  }
+  if (!tok) { out.skipped = 'no_token'; return finish(); }
+  if (Date.now() - capSweepStartedAt < MADS_CAP_LATCH) { out.skipped = 'busy'; return finish(); }
+  var runs = freshMadsRuns();           // the OTHER instance may have swept already
+  var rids = Object.keys(runs).filter(function (rid) {
+    if (only && rid !== only) return false;
+    var r = runs[rid];
+    if (!r || !r.campaignId || !(parseFloat(r.adCap) > 0) || !r.ads) return false;
+    if (!only && Date.now() - (r.capSweptAt || 0) < MADS_CAP_EVERY) return false;
+    return Object.keys(r.ads).some(function (k) { return r.ads[k] && r.ads[k].adId; });
+  });
+  out.rounds = rids.length;
+  if (!rids.length) return finish();
+  capSweepStartedAt = Date.now();
+  var i = 0;
+  (function nextRound() {
+    if (i >= rids.length) return finish();
+    var rid = rids[i++];
+    // claim the sweep so the sibling instance skips this round for a while
+    var rec = capLedgerEdit(rid, function (r) { r.capSweptAt = Date.now(); });
+    if (!rec || !rec.campaignId) return nextRound();
+    var campaignId = rec.campaignId;
+    capReadAds(campaignId, tok, guard(function (aerr, live) {
+      if (aerr) { out.errors[rid] = aerr.message.slice(0, 150); return nextRound(); }
+      out.checked += Object.keys(live).length;
+      // reconcile our flags with Meta before deciding anything: an ad the
+      // user switched back on must be protected again
+      capLedgerEdit(rid, function (r) {
+        Object.keys(r.ads || {}).forEach(function (k) {
+          var a = r.ads[k]; if (!a || !a.adId) return;
+          var lv = live[String(a.adId)];
+          if (!lv) return;
+          if (lv.status === 'ACTIVE' && a.paused) { a.paused = false; delete a.capPausedAt; }
+          if (lv.status === 'PAUSED' && !a.paused) a.paused = true;
+        });
+      });
+      var fresh = freshMadsRuns()[rid] || {};
+      var cap = parseFloat(fresh.adCap);
+      if (!(cap > 0)) return nextRound();          // ceiling cleared mid-sweep
+      var over = Object.keys(fresh.ads || {}).filter(function (k) {
+        var a = fresh.ads[k]; if (!a || !a.adId) return false;
+        var lv = live[String(a.adId)];
+        return lv && lv.status === 'ACTIVE' && lv.spend >= cap;
+      });
+      var j = 0;
+      (function nextPause() {
+        if (j >= over.length) return nextRound();
+        var k = over[j++];
+        // re-read the ceiling every time: the user may have raised it while
+        // this sweep was working through the list
+        var now = freshMadsRuns()[rid] || {};
+        var capNow = parseFloat(now.adCap);
+        var adId = now.ads && now.ads[k] && now.ads[k].adId;
+        var spendNow = adId ? (live[String(adId)] || {}).spend : null;
+        if (!(capNow > 0) || !adId || !(spendNow >= capNow)) return setTimeout(guard(nextPause), 50);
+        var tried = 0;
+        (function pauseOne() {
+          fbRequest('POST', '/' + adId, { status: 'PAUSED', access_token: tok }, guard(function (perr) {
+            if (perr) {
+              var code = perr.fb && perr.fb.code;
+              if (!tried++ && (code === 17 || code === 613 || code === 80004 || code === 4 || code === 32)) {
+                return setTimeout(guard(pauseOne), 30000);
+              }
+              out.errors[k] = perr.message.slice(0, 150);
+              return setTimeout(guard(nextPause), 400);
+            }
+            capLedgerEdit(rid, function (r) {
+              if (r.ads && r.ads[k]) { r.ads[k].paused = true; r.ads[k].capPausedAt = Date.now(); r.ads[k].capPausedSpend = spendNow; }
+            });
+            out.paused.push({ round: rid, adKey: k, spend: spendNow });
+            console.log('[mads] cap: paused ' + k + ' at ' + spendNow + ' (ceiling ' + capNow + ')');
+            setTimeout(guard(nextPause), 400);
+          }));
+        })();
+      })();
+    }));
+  })();
 }
 
 /* ---- Transcription proxy (local transcribe-hub on :3004) ------------------ */
@@ -2890,6 +3037,45 @@ var server = http.createServer(function (req, res) {
       sendJSON(res, 200, { ok: true, job: jobId, state: 'running' });
     }, 256 * 1024);
   }
+  // The per-ad spend ceiling for a round. GET reads the authoritative value
+  // (the browser's copy can be stale); POST sets it — or clears it with 0 —
+  // and sweeps straight away so anything already over the line pauses now.
+  if (pathname === '/api/mads/cap' && req.method === 'GET') {
+    if (!requireAppHeader(req, res)) return;
+    var ridG = String(parsed.query.roundId || '');
+    var recG = ridG ? freshMadsRuns()[ridG] : null;
+    if (!recG) return sendJSON(res, 404, { error: 'unknown_round' });
+    var pausedKeys = Object.keys(recG.ads || {}).filter(function (k) { return recG.ads[k] && recG.ads[k].paused; });
+    return sendJSON(res, 200, { ok: true, cap: parseFloat(recG.adCap) || 0, paused: pausedKeys, sweptAt: recG.capSweptAt || 0 });
+  }
+  if (pathname === '/api/mads/cap' && req.method === 'POST') {
+    if (!requireAppHeader(req, res)) return;
+    if (!effectiveMadsToken()) return sendJSON(res, 501, { error: 'no_mads_token' });
+    return readBody(req, function (raw) {
+      var input; try { input = raw ? JSON.parse(raw) : {}; } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
+      var rid = String(input.roundId || '');
+      var recC = rid ? freshMadsRuns()[rid] : null;
+      if (!recC || !recC.campaignId) return sendJSON(res, 400, { error: 'bad_args', message: 'No dark-ads run is recorded for this round.' });
+      var cap = parseFloat(input.cap);
+      if (!(cap >= 0) || !isFinite(cap)) return sendJSON(res, 400, { error: 'bad_args', message: 'cap must be a number (0 clears it)' });
+      // the ceiling is durable BEFORE any Meta call — even if the sweep below
+      // is slow or fails, the watchdog picks it up on its next pass
+      capLedgerEdit(rid, function (r) {
+        if (cap > 0) r.adCap = cap; else delete r.adCap;
+        r.capSweptAt = 0;              // force the immediate sweep
+      });
+      if (!cap) return sendJSON(res, 200, { ok: true, cap: 0 });
+      // answer even if the sweep runs long (many ads, rate-limit backoff) —
+      // the ceiling is already saved and enforcement continues in background
+      var answered = false;
+      function answer(swept, pending) {
+        if (answered) return; answered = true;
+        sendJSON(res, 200, { ok: true, cap: cap, swept: swept || null, pending: !!pending });
+      }
+      var slow = setTimeout(function () { answer(null, true); }, 25000);
+      madsCapSweep(rid, function (err, out) { clearTimeout(slow); answer(out || null, false); });
+    }, 64 * 1024);
+  }
   if (pathname === '/api/mads/job' && req.method === 'GET') {
     if (!requireAppHeader(req, res)) return;
     var mj = igJobs[String(parsed.query.job || '').slice(0, 120)];
@@ -3603,4 +3789,7 @@ server.listen(PORT, '127.0.0.1', function () {
     pubSweep();
     if (effectiveIgToken() && Date.now() - lastIgRefresh > 23 * 3600 * 1000) { lastIgRefresh = Date.now(); igRefresh(); }
   }, 3600 * 1000);
+  // per-ad spend ceilings: check often, act only when a round is due
+  setInterval(function () { madsCapSweep(null, function () {}); }, 2 * 60 * 1000);
+  setTimeout(function () { madsCapSweep(null, function () {}); }, 20000);
 });

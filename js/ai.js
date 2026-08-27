@@ -386,6 +386,14 @@ window.Ads = window.Ads || {};
       });
     });
   }
+  // per-ad spend ceiling for a round (0 clears it); the server sweeps at once
+  function madsCap(roundId, cap) {
+    return fetch('/api/mads/cap', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Ads-Hub': '1' }, body: JSON.stringify({ roundId: roundId, cap: cap })
+    }).then(function (r) {
+      return r.json().then(function (b) { if (!r.ok) throw new Error(b && b.message || 'Cap failed (' + r.status + ')'); return b; });
+    });
+  }
   // resolve an interest keyword against Meta's detailed-targeting catalog
   function madsInterests(q) {
     return fetch('/api/mads/interests?q=' + encodeURIComponent(q), { headers: { 'X-Ads-Hub': '1' } })
@@ -419,5 +427,5 @@ window.Ads = window.Ads || {};
     });
   }
 
-  Ads.ai = { status: status, setKey: setKey, generateCopy: generateCopy, generateDossier: generateDossier, research: research, audience: audience, landingContent: landingContent, imageConcepts: imageConcepts, genImage: genImage, genImages: genImages, genClip: genClip, geminiStatus: geminiStatus, setGeminiKey: setGeminiKey, geminiVerify: geminiVerify, metaStatus: metaStatus, setMetaKey: setMetaKey, metaVerify: metaVerify, metaStage: metaStage, metaPost: metaPost, metaInsights: metaInsights, madsStatus: madsStatus, setMadsKey: setMadsKey, madsVerify: madsVerify, madsConfig: madsConfig, madsDark: madsDark, madsScale: madsScale, madsInsights: madsInsights, madsInterests: madsInterests, darkTarget: darkTarget, mediaPlan: mediaPlan, variationToSpec: variationToSpec, scrape: scrape, editSpec: editSpec };
+  Ads.ai = { status: status, setKey: setKey, generateCopy: generateCopy, generateDossier: generateDossier, research: research, audience: audience, landingContent: landingContent, imageConcepts: imageConcepts, genImage: genImage, genImages: genImages, genClip: genClip, geminiStatus: geminiStatus, setGeminiKey: setGeminiKey, geminiVerify: geminiVerify, metaStatus: metaStatus, setMetaKey: setMetaKey, metaVerify: metaVerify, metaStage: metaStage, metaPost: metaPost, metaInsights: metaInsights, madsStatus: madsStatus, setMadsKey: setMadsKey, madsVerify: madsVerify, madsConfig: madsConfig, madsDark: madsDark, madsScale: madsScale, madsCap: madsCap, madsInsights: madsInsights, madsInterests: madsInterests, darkTarget: darkTarget, mediaPlan: mediaPlan, variationToSpec: variationToSpec, scrape: scrape, editSpec: editSpec };
 })();
