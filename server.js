@@ -1811,7 +1811,11 @@ function madsScaleRun(jobId, input) {
 // ever pauses; it can never start, resume, or raise anything. Meta's spend
 // reporting lags ~15 minutes, so an ad can overshoot slightly before the
 // pause lands — that is inherent to the platform, not a bug here.
-var MADS_CAP_EVERY = 5 * 60 * 1000;      // a round is swept at most this often
+// Meta enforces an account-level API call budget (error 17) that a young ad
+// account exhausts easily — and every sweep costs a paginated read. 20 minutes
+// is frequent enough for a ceiling (Meta's own spend figures lag ~15 min
+// anyway) while leaving the account's quota for real work.
+var MADS_CAP_EVERY = 20 * 60 * 1000;     // a round is swept at most this often
 var MADS_CAP_LATCH = 10 * 60 * 1000;     // a stuck sweep releases itself after this
 var capSweepStartedAt = 0;
 // Surgical ledger write: merge the sibling instance's changes from disk FIRST,
@@ -3809,7 +3813,7 @@ server.listen(PORT, '127.0.0.1', function () {
     pubSweep();
     if (effectiveIgToken() && Date.now() - lastIgRefresh > 23 * 3600 * 1000) { lastIgRefresh = Date.now(); igRefresh(); }
   }, 3600 * 1000);
-  // per-ad spend ceilings: check often, act only when a round is due
-  setInterval(function () { madsCapSweep(null, function () {}); }, 2 * 60 * 1000);
+  // per-ad spend ceilings: check periodically, act only when a round is due
+  setInterval(function () { madsCapSweep(null, function () {}); }, 5 * 60 * 1000);
   setTimeout(function () { madsCapSweep(null, function () {}); }, 20000);
 });
