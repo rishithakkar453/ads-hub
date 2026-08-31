@@ -479,14 +479,18 @@ window.Ads = window.Ads || {};
   // this browser holds is archived into darkRuns FIRST — so all-time stats
   // keep aggregating across both — and the new one becomes current.
   function adoptServerRuns(pid, cb) {
-    var p = store.getProject(pid);
-    if (!p) { if (cb) cb(); return; }
-    var rounds = projRounds(p).filter(function (r) { return r.dark || r.darkRuns; });
+    // pid null = every project (Live Tracking spans all of them)
+    var projects = pid ? [store.getProject(pid)].filter(Boolean) : store.listProjects();
+    var rounds = [];
+    projects.forEach(function (p) {
+      projRounds(p).forEach(function (r) { if (r.dark || r.darkRuns) rounds.push({ pid: p.id, r: r }); });
+    });
     if (!rounds.length) { if (cb) cb(); return; }
     var i = 0;
     (function next() {
       if (i >= rounds.length) { if (cb) cb(); return; }
-      var r = rounds[i++];
+      var entry = rounds[i++];
+      var pid = entry.pid, r = entry.r;
       fetch('/api/mads/run?roundId=' + encodeURIComponent(r.id), { headers: { 'X-Ads-Hub': '1' } })
         .then(function (rr) { return rr.ok ? rr.json() : null; })
         .then(function (b) {
@@ -748,8 +752,12 @@ window.Ads = window.Ads || {};
           if (btn) { btn.disabled = false; btn.innerHTML = old; }
           Ads.toast('Sync failed: ' + err.message, true); return;
         }
-        // also pull Meta insights for every dark ad ever run (all projects) —
-        // the Spend column then carries the EXACT amount from Meta, no CSV
+        // adopt any server-side structure change FIRST — otherwise this sums
+        // only the ad ids this browser happens to remember and silently
+        // under-reports spend after a restructure
+        adoptServerRuns(null, function () {
+        // then pull Meta insights for every dark ad ever run (all projects) —
+        // the Spend column carries the EXACT amount from Meta, no CSV
         var idMap = darkAdIdsByKey(), all = [];
         Object.keys(idMap).forEach(function (k) {
           idMap[k].forEach(function (id) { if (all.indexOf(id) < 0) all.push(id); });
@@ -768,6 +776,7 @@ window.Ads = window.Ads || {};
           else if (st.failed) Ads.toast('Synced — spend updated for ' + st.ok + ' of ' + st.total + ' ads (rest kept their last figure)');
           else Ads.toast('Synced — spend filled from Meta');
           rerender();
+        });
         });
       });
     }

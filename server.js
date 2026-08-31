@@ -2361,7 +2361,14 @@ function cleanKey(s) {
   s = String(s || '').toLowerCase();
   return /^[a-z0-9][a-z0-9-]{0,47}$/.test(s) ? s : null;
 }
-function cleanSrc(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 16); }
+// A source tag is ours (?s=ig etc). Scanners and privacy proxies rewrite the
+// query string and hand back placeholders like "--sanitized--" or "redacted";
+// those are not traffic sources, so they are dropped rather than shown as one.
+var SRC_PLACEHOLDER = /^(sanitized|redacted|removed|filtered|masked|null|undefined|none)$/;
+function cleanSrc(s) {
+  s = String(s || '').toLowerCase().replace(/[^a-z0-9_-]/g, '').replace(/^[-_]+|[-_]+$/g, '').slice(0, 16);
+  return SRC_PLACEHOLDER.test(s) ? '' : s;
+}
 function uaClass(ua) { return /mobile|iphone|android|ipad/i.test(String(ua || '')) ? 'm' : 'd'; }
 function hostOf(u) { try { return new URL(String(u)).hostname.slice(0, 80); } catch (e) { return ''; } }
 
@@ -2448,7 +2455,10 @@ function trackStats(cb) {
       // bound source cardinality: a hostile client can rotate through unlimited
       // ?s= values; keep the first N distinct, lump the rest into 'other'
       function bumpSrc(a, s) {
-        if (!s) return;
+        // also applied when folding OLD events, so placeholders already on
+        // disk stop showing up as a traffic source
+        s = String(s || '').toLowerCase().replace(/[^a-z0-9_-]/g, '').replace(/^[-_]+|[-_]+$/g, '');
+        if (!s || SRC_PLACEHOLDER.test(s)) return;
         if (a.bySrc[s] === undefined && Object.keys(a.bySrc).length >= 24) s = 'other';
         a.bySrc[s] = (a.bySrc[s] || 0) + 1;
       }
