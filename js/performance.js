@@ -499,15 +499,27 @@ window.Ads = window.Ads || {};
           var rF = (pF && projRounds(pF).filter(function (x) { return x.id === r.id; })[0]);
           if (!rF) return;
           var cur = rF.dark;
+          // a round can have PARALLEL campaigns server-side (e.g. one per geo
+          // tier) — any server-recorded run this browser has never seen is
+          // merged into darkRuns so its spend/clicks aggregate all-time
+          var runsArr = (rF.darkRuns || []).slice();
+          var changed = false;
+          (b.prevRuns || []).forEach(function (pr) {
+            if (!pr || !pr.campaignId || !pr.ads) return;
+            if (pr.campaignId === b.run.campaignId) return;
+            if (cur && pr.campaignId === cur.campaignId) return;
+            if (runsArr.some(function (x) { return x.campaignId === pr.campaignId; })) return;
+            runsArr.push({ campaignId: pr.campaignId, adsetId: pr.adsetId || '', split: !!pr.split, ads: pr.ads, at: pr.at || Date.now() });
+            changed = true;
+          });
           if (cur && cur.campaignId === b.run.campaignId) {
-            // same campaign — just refresh the per-ad map, cap and flags
+            // same campaign — refresh the per-ad map, cap and flags
             var same = JSON.parse(JSON.stringify(cur));
             same.ads = b.run.ads; same.split = b.run.split;
             if (b.run.adCap) same.adCap = b.run.adCap; else delete same.adCap;
-            return updateRound(pid, r.id, { dark: same });
+            return updateRound(pid, r.id, changed ? { dark: same, darkRuns: runsArr } : { dark: same });
           }
           // structure changed: archive what we had, adopt the server's
-          var runsArr = (rF.darkRuns || []).slice();
           if (cur && cur.campaignId && !runsArr.some(function (x) { return x.campaignId === cur.campaignId; })) runsArr.push(cur);
           updateRound(pid, r.id, {
             dark: {
