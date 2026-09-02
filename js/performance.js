@@ -672,12 +672,16 @@ window.Ads = window.Ads || {};
       if (shas) metaSpendBy[k] = Math.round(ssum * 100) / 100;
     });
     // round view: an ad can have Meta delivery before its first tracker event
-    // lands (or the reverse) — union both sides so no money is invisible
+    // lands (or the reverse) — union both sides so no money is invisible.
+    // Then restrict to the round's ROSTER: old ads' pages keep catching stray
+    // traffic (late opens, scanners revisiting old tracked links) inside the
+    // window, and those ads aren't part of this round — they must not appear.
     var keys = Object.keys(snap.ads);
     if (era !== 'all') {
       [metaClicksBy, metaSpendBy].forEach(function (m) {
         Object.keys(m).forEach(function (k) { if (keys.indexOf(k) < 0) keys.push(k); });
       });
+      keys = keys.filter(function (k) { return dkIds[k]; });
     }
     var allSnap = (t.snapshot && t.snapshot.ads) || {};
     return keys.map(function (key) {
