@@ -334,7 +334,56 @@ window.Ads = window.Ads || {};
   // (Stage 1): clicks on the tracked link, landing-page views + dwell time +
   // scroll, and click-throughs to the main site — plus spend the user enters,
   // giving cost-per-click and cost-per-site-visit, and an ad-vs-ad leaderboard.
-  var trackUI = { sort: 'clicks', dir: -1 };
+  var trackUI = { sort: 'clicks', dir: -1, era: 'all' };
+  // persisted era selection — only 'all' or a plain number is valid ('__proto__'
+  // and friends would slip an in-guard via the prototype chain)
+  try {
+    var savedEra = localStorage.getItem('ads-hub:trkEra');
+    if (savedEra === 'all' || /^\d+$/.test(savedEra || '')) trackUI.era = savedEra;
+  } catch (e) {}
+  // windowed first-party snapshots per era, fetched on demand; cleared on
+  // every sync so fresh events show up in round views too
+  var eraSnaps = {};
+  // era metadata ({ "1": {label, startMs}, … }) — the freshest copy any round
+  // adopted from the server (by the run's own timestamp); null until a sync
+  // has run on this browser
+  function eraInfo() {
+    var best = null, bestAt = -1;
+    store.listProjects().forEach(function (p) {
+      (p.rounds || []).forEach(function (r) {
+        if (!r.dark || !r.dark.eras) return;
+        var at = Date.parse(r.dark.at) || 0;
+        if (at >= bestAt) { best = r.dark.eras; bestAt = at; }
+      });
+    });
+    return best;
+  }
+  // own-property era lookup: bare eras[era] would let '__proto__'-style keys
+  // resolve through the prototype chain and pose as a valid round
+  function eraEntry(eras, era) {
+    return (eras && Object.prototype.hasOwnProperty.call(eras, era)) ? eras[era] : null;
+  }
+  // [since, until) for one era: from its startMs to the next era's start
+  function eraWindow(era) {
+    var eras = eraInfo(); if (!eraEntry(eras, era)) return null;
+    var ids = Object.keys(eras).sort(function (a, b) { return (+eras[a].startMs || 0) - (+eras[b].startMs || 0); });
+    var i = ids.indexOf(String(era));
+    var since = +eras[era].startMs || 0;
+    var until = (i >= 0 && ids[i + 1]) ? (+eras[ids[i + 1]].startMs || 0) : 0;   // 0 = open-ended
+    return { since: since, until: until };
+  }
+  function fetchEraSnap(era, cb) {
+    var w = eraWindow(era); if (!w) { cb(null); return; }
+    var tk = (store.getSettings().tracking || {}).token;
+    var h = { 'X-Ads-Hub': '1' }; if (tk) h.Authorization = 'Bearer ' + tk;
+    fetch(trackBase() + '/api/track/stats?since=' + w.since + '&until=' + w.until, { headers: h })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (b) {
+        if (b && b.ads) eraSnaps[era] = { snapshot: b, at: Date.now() };
+        cb(b ? eraSnaps[era] : null);
+      })
+      .catch(function () { cb(null); });
+  }
   // API base: where THIS browser reaches the collector (same origin via the
   // tunnel or the gate — the public rewrite below would break both CORS and
   // the gate for /api/track/stats).
@@ -405,14 +454,20 @@ window.Ads = window.Ads || {};
   // The same creative re-posted in a later round is a NEW ad object on Meta,
   // so its exact total spend = the sum across all of them — mirroring how the
   // tracked link merges clicks per adKey. Scope defaults to every project.
-  function darkAdIdsByKey(projects) {
+  function darkAdIdsByKey(projects, era) {
+    // era: undefined/'all' = every run; otherwise only runs tagged with that
+    // era (a "round" can span several parallel campaigns — same tag). Runs
+    // recorded before eras existed count as era 1, which is factually right.
     var map = {};   // adKey → [adId, …]
+    var want = (era == null || era === 'all') ? null : String(era);
     (projects || store.listProjects()).forEach(function (p) {
       (p.rounds || []).forEach(function (r) {
-        var sets = [(r.dark && r.dark.ads) || {}].concat((r.darkRuns || []).map(function (dr) { return dr.ads || {}; }));
+        var sets = [{ ads: (r.dark && r.dark.ads) || {}, era: (r.dark && r.dark.era) || 1 }]
+          .concat((r.darkRuns || []).map(function (dr) { return { ads: dr.ads || {}, era: dr.era || 1 }; }));
         sets.forEach(function (set) {
-          Object.keys(set).forEach(function (k) {
-            var a = set[k];
+          if (want && String(set.era) !== want) return;
+          Object.keys(set.ads).forEach(function (k) {
+            var a = set.ads[k];
             if (!a || !a.adId) return;
             if (!map[k]) map[k] = [];
             if (map[k].indexOf(a.adId) < 0) map[k].push(a.adId);
@@ -504,12 +559,25 @@ window.Ads = window.Ads || {};
           // merged into darkRuns so its spend/clicks aggregate all-time
           var runsArr = (rF.darkRuns || []).slice();
           var changed = false;
+          // campaignId → era, from everything the server knows — used to tag
+          // new merges AND to backfill era onto runs archived before eras
+          // existed (the round filter needs every run labeled)
+          var eraBy = {};
+          if (b.run.era) eraBy[b.run.campaignId] = b.run.era;
+          (b.prevRuns || []).forEach(function (pr) { if (pr && pr.campaignId && pr.era) eraBy[pr.campaignId] = pr.era; });
+          runsArr = runsArr.map(function (x) {
+            if (x && x.campaignId && eraBy[x.campaignId] && x.era !== eraBy[x.campaignId]) {
+              changed = true;
+              var y = JSON.parse(JSON.stringify(x)); y.era = eraBy[x.campaignId]; return y;
+            }
+            return x;
+          });
           (b.prevRuns || []).forEach(function (pr) {
             if (!pr || !pr.campaignId || !pr.ads) return;
             if (pr.campaignId === b.run.campaignId) return;
             if (cur && pr.campaignId === cur.campaignId) return;
             if (runsArr.some(function (x) { return x.campaignId === pr.campaignId; })) return;
-            runsArr.push({ campaignId: pr.campaignId, adsetId: pr.adsetId || '', split: !!pr.split, ads: pr.ads, at: pr.at || Date.now() });
+            runsArr.push({ campaignId: pr.campaignId, adsetId: pr.adsetId || '', split: !!pr.split, ads: pr.ads, at: pr.at || Date.now(), era: pr.era || 1 });
             changed = true;
           });
           if (cur && cur.campaignId === b.run.campaignId) {
@@ -517,17 +585,26 @@ window.Ads = window.Ads || {};
             var same = JSON.parse(JSON.stringify(cur));
             same.ads = b.run.ads; same.split = b.run.split;
             if (b.run.adCap) same.adCap = b.run.adCap; else delete same.adCap;
+            if (b.run.era) same.era = b.run.era;
+            if (b.eras) same.eras = b.eras;
             return updateRound(pid, r.id, changed ? { dark: same, darkRuns: runsArr } : { dark: same });
           }
           // structure changed: archive what we had, adopt the server's
-          if (cur && cur.campaignId && !runsArr.some(function (x) { return x.campaignId === cur.campaignId; })) runsArr.push(cur);
+          if (cur && cur.campaignId && !runsArr.some(function (x) { return x.campaignId === cur.campaignId; })) {
+            var arch = JSON.parse(JSON.stringify(cur));
+            if (eraBy[arch.campaignId]) arch.era = eraBy[arch.campaignId];
+            runsArr.push(arch);
+          }
           updateRound(pid, r.id, {
             dark: {
               campaignId: b.run.campaignId, adsetId: b.run.adsetId, split: b.run.split,
               budget: b.run.budget != null ? b.run.budget : (cur && cur.budget) || null,
               currency: (cur && cur.currency) || 'CAD',
               endTime: b.run.endTime || '', adCap: b.run.adCap || undefined,
-              at: util.nowISO(), ads: b.run.ads
+              at: util.nowISO(), ads: b.run.ads,
+              // a server record that lost its eras map must not destroy the
+              // client's only surviving copy on restructure
+              era: b.run.era || 1, eras: b.eras || (cur && cur.eras) || undefined
             },
             darkRuns: runsArr
           });
@@ -566,7 +643,13 @@ window.Ads = window.Ads || {};
   }
   // one row per tracked ad: raw funnel + spend-derived cost efficiency
   function trackRows() {
-    var t = store.getTracking(); var snap = t.snapshot; if (!snap || !snap.ads) return [];
+    var t = store.getTracking();
+    var era = trackUI.era;
+    // round view: the funnel comes from a TIME-WINDOWED server snapshot (same
+    // pages run in every round, so only time separates them) and Meta numbers
+    // come only from that round's campaigns. All-time keeps original behavior.
+    var snap = era === 'all' ? t.snapshot : (eraSnaps[era] && eraSnaps[era].snapshot);
+    if (!snap || !snap.ads) return [];
     var spend = t.spend || {};
     // Meta-BILLED link clicks per creative (summed across its runs): the
     // real-people count Meta charged for. The tracker's own click count also
@@ -574,24 +657,42 @@ window.Ads = window.Ads || {};
     // scanners/prefetchers use real phone-browser signatures), so where an ad
     // ran as a dark ad, Meta's number is the honest one.
     var dkBy = (t.dark || {}).byId || {};
-    var dkIds = darkAdIdsByKey();
-    var metaClicksBy = {};
+    var dkIds = darkAdIdsByKey(null, era);
+    var metaClicksBy = {}, metaSpendBy = {};
     Object.keys(dkIds).forEach(function (k) {
-      var sum = 0, has = false;
+      var sum = 0, has = false, ssum = 0, shas = false;
       dkIds[k].forEach(function (id) {
         var m = dkBy[id];
         if (!m || m.error) return;
         var v = m.linkClicks != null ? m.linkClicks : m.clicks;   // linkClicks lands on first sync after this deploy
         if (v != null) { sum += +v; has = true; }
+        if (m.spend != null) { ssum += +m.spend; shas = true; }
       });
       if (has) metaClicksBy[k] = sum;
+      if (shas) metaSpendBy[k] = Math.round(ssum * 100) / 100;
     });
-    return Object.keys(snap.ads).map(function (key) {
-      var a = snap.ads[key] || {}; var sp = spend[key] != null ? util.num(spend[key]) : null;
+    // round view: an ad can have Meta delivery before its first tracker event
+    // lands (or the reverse) — union both sides so no money is invisible
+    var keys = Object.keys(snap.ads);
+    if (era !== 'all') {
+      [metaClicksBy, metaSpendBy].forEach(function (m) {
+        Object.keys(m).forEach(function (k) { if (keys.indexOf(k) < 0) keys.push(k); });
+      });
+    }
+    var allSnap = (t.snapshot && t.snapshot.ads) || {};
+    return keys.map(function (key) {
+      var a = snap.ads[key] || {};
+      var label = allSnap[key] || {};   // manifest names live on the all-time snapshot
+      // round view: spend is Meta's per-campaign figure only — a manually
+      // typed figure is an all-time number and would misstate a single round
+      var sp = era === 'all'
+        ? (spend[key] != null ? util.num(spend[key]) : null)
+        : (metaSpendBy[key] != null ? metaSpendBy[key] : null);
       var mc = metaClicksBy[key] != null ? metaClicksBy[key] : null;
       var clickBase = mc != null ? mc : (a.clicks || 0);   // cost/click on billed clicks when Meta knows them
       return {
-        key: key, name: a.name || a.headline || key, headline: a.headline || '', page: a.page || '',
+        key: key, name: a.name || a.headline || label.name || label.headline || key,
+        headline: a.headline || label.headline || '', page: a.page || label.page || '',
         clicks: a.clicks || 0, metaClicks: mc, views: a.views || 0, uniques: a.uniques || 0,
         avgSeconds: a.avgSeconds || 0, scrollAvg: a.scrollAvg || 0, outs: a.outs || 0, outRate: a.outRate || 0,
         bySrc: a.bySrc || {}, spend: sp,
@@ -621,21 +722,77 @@ window.Ads = window.Ads || {};
     render: function (el) {
       var t = store.getTracking();
       var base = trackBase(), isLocal = !(store.getSettings().tracking || {}).url;
+      var eras = eraInfo();
+      // a selected round whose metadata vanished (fresh browser) falls back
+      if (trackUI.era !== 'all' && !eraEntry(eras, trackUI.era)) trackUI.era = 'all';
       var rows = trackRows();
+
+      // round filter — only when era metadata exists (arrives with the first
+      // sync after a round-2-style restructure)
+      var eraBar = '';
+      if (eras) {
+        var opts = [{ id: 'all', label: 'All time' }].concat(
+          Object.keys(eras).sort(function (a, b) { return (+eras[a].startMs || 0) - (+eras[b].startMs || 0); })
+            .map(function (id) { return { id: id, label: eras[id].label || ('Round ' + id) }; }));
+        eraBar = '<div class="trk-era" id="trk-era">' + opts.map(function (o) {
+          return '<button class="btn is-sm' + (String(trackUI.era) === o.id ? ' is-primary' : '') + '" data-era="' + esc(o.id) + '">' + esc(o.label) + '</button>';
+        }).join('') + '</div>';
+      }
 
       var head = '<div class="trk-head view-section">' +
         '<div><div><span class="u-label">Collector</span> <code class="trk-url">' + esc(base) + '</code>' +
           (isLocal ? ' <span class="u-faint">(running on this computer)</span>' : '') + '</div>' +
           '<div class="u-faint" id="trk-synced">' + (t.syncedAt ? 'Last synced ' + util.timeAgo(t.syncedAt) : 'Not synced yet') + '</div></div>' +
+        eraBar +
         '<button class="btn is-sm" id="trk-sync"><span class="btn-ico">' + icons().globe + '</span> Sync now</button>' +
       '</div>';
 
+      function bindEra(scope) {
+        var bar = scope.querySelector('#trk-era'); if (!bar) return;
+        bar.querySelectorAll('[data-era]').forEach(function (b) {
+          b.addEventListener('click', function () {
+            var v = b.getAttribute('data-era');
+            if (String(trackUI.era) === v) return;
+            trackUI.era = v;
+            try { localStorage.setItem('ads-hub:trkEra', v); } catch (e) {}
+            if (v !== 'all' && !Object.prototype.hasOwnProperty.call(eraSnaps, v)) {
+              b.innerHTML = '<span class="spinner"></span> ' + esc(b.textContent);
+              // guard like every sibling path: never yank the user back to
+              // Live Tracking if they navigated away during a slow fetch
+              fetchEraSnap(v, function () { if (document.getElementById('trk-era')) refreshTrackingView(); });
+            }
+            else refreshTrackingView();
+          });
+        });
+      }
+
+      // round selected but its windowed snapshot not fetched yet (first visit
+      // after a reload): fetch, then re-render
+      if (trackUI.era !== 'all' && !Object.prototype.hasOwnProperty.call(eraSnaps, trackUI.era)) {
+        el.innerHTML = head + '<div class="empty"><div class="empty-title"><span class="spinner"></span> Loading ' +
+          esc((eraEntry(eras, trackUI.era) || {}).label || 'round') + '…</div></div>';
+        bindEra(el); bindSync(el);
+        var want = trackUI.era;   // bail if the selection moved on before this resolves
+        fetchEraSnap(want, function (snap) {
+          if (!document.getElementById('trk-era')) return;   // user left the view
+          if (trackUI.era !== want) return;                  // user picked another round meanwhile
+          if (!snap) { trackUI.era = 'all'; Ads.toast('Could not load that round — showing all time', true); }
+          refreshTrackingView();
+        });
+        return;
+      }
+
       if (!rows.length) {
-        el.innerHTML = head + '<div class="empty"><div class="empty-title">No tracking data yet</div>' +
-          '<div>Generate landing pages (which publishes them), post your ads with their tracked links, then hit <strong>Sync now</strong>. ' +
-          'Clicks, time on page and click-throughs to your site will show up here per ad.</div>' +
-          '<div class="btn-row" style="justify-content:center;margin-top:1.6rem"><button class="btn" id="trk-sync-empty"><span class="btn-ico">' + icons().globe + '</span> Sync now</button></div></div>';
-        bindSync(el);
+        var emptyMsg = trackUI.era !== 'all'
+          ? '<div class="empty"><div class="empty-title">Nothing in this round yet</div>' +
+            '<div>No clicks or visits have been recorded for <strong>' + esc((eras && eras[trackUI.era] || {}).label || 'this round') + '</strong> so far. ' +
+            'Hit <strong>Sync now</strong> once the ads have been delivering for a while.</div></div>'
+          : '<div class="empty"><div class="empty-title">No tracking data yet</div>' +
+            '<div>Generate landing pages (which publishes them), post your ads with their tracked links, then hit <strong>Sync now</strong>. ' +
+            'Clicks, time on page and click-throughs to your site will show up here per ad.</div>' +
+            '<div class="btn-row" style="justify-content:center;margin-top:1.6rem"><button class="btn" id="trk-sync-empty"><span class="btn-ico">' + icons().globe + '</span> Sync now</button></div></div>';
+        el.innerHTML = head + emptyMsg;
+        bindEra(el); bindSync(el);
         return;
       }
 
@@ -657,7 +814,9 @@ window.Ads = window.Ads || {};
           : kpi('Link clicks', util.fmtNum(tot.clicks, 0), tot.views + ' opened the page', true)) +
         kpi('Avg time on page', fmtDur(blendAvg), 'across ' + tot.uniques + ' visitors') +
         kpi('Went to your site', util.fmtNum(tot.outs, 0), (tot.views ? Math.round(100 * tot.outs / tot.views) : 0) + '% of visitors') +
-        kpi('Total spend', money(tot.spend || null), anySpend ? (tot.outs ? money(tot.spend / tot.outs) + ' per site visit' : '—') : 'add spend below') +
+        kpi('Total spend', money(tot.spend || null),
+          anySpend ? (tot.outs ? money(tot.spend / tot.outs) + ' per site visit' : (trackUI.era !== 'all' ? 'Meta spend, this round' : '—'))
+                   : (trackUI.era !== 'all' ? 'Meta spend, this round' : 'add spend below')) +
       '</div>';
 
       // best performer callout: cheapest cost-per-site-visit if spend known,
@@ -671,6 +830,7 @@ window.Ads = window.Ads || {};
         '<div class="view-section"><div class="section-head"><h2>Every ad, ranked</h2></div>' +
           '<div id="trk-table"></div></div>';
       renderTable(el);
+      bindEra(el);
       bindSync(el);
     }
   });
@@ -721,8 +881,13 @@ window.Ads = window.Ads || {};
         '<td class="num">' + (r.scrollAvg ? r.scrollAvg + '%' : '—') + '</td>' +
         '<td class="num">' + util.fmtNum(r.outs, 0) + '</td>' +
         '<td class="num">' + (r.views ? Math.round(r.outRate * 100) + '%' : '—') + '</td>' +
-        '<td class="num" data-stop="1"><span class="trk-spend-cell"><span class="trk-cur">' + esc(sym()) + '</span>' +
-          '<input class="input trk-spend-input" data-spend="' + esc(r.key) + '" type="number" step="any" inputmode="decimal" value="' + (r.spend != null ? esc(r.spend) : '') + '" placeholder="0"></span></td>' +
+        // round view: spend is Meta's windowed figure — display only (the
+        // editable field is an ALL-TIME manual number; letting it be typed
+        // here would silently overwrite the all-time spend with a round's)
+        (trackUI.era !== 'all'
+          ? '<td class="num">' + money(r.spend) + '</td>'
+          : '<td class="num" data-stop="1"><span class="trk-spend-cell"><span class="trk-cur">' + esc(sym()) + '</span>' +
+            '<input class="input trk-spend-input" data-spend="' + esc(r.key) + '" type="number" step="any" inputmode="decimal" value="' + (r.spend != null ? esc(r.spend) : '') + '" placeholder="0"></span></td>') +
         '<td class="num">' + money(r.cpc) + '</td>' +
         '<td class="num">' + money(r.cps) + '</td>' +
       '</tr>';
@@ -747,7 +912,10 @@ window.Ads = window.Ads || {};
       inp.addEventListener('click', function (e) { e.stopPropagation(); });
       inp.addEventListener('change', function () {
         store.setTrackSpend(inp.getAttribute('data-spend'), inp.value === '' ? null : util.num(inp.value));
-        refreshTrackingView();   // KPI total + top-performer + derived columns stay consistent
+        // deferred: blur→change fires BEFORE a click on another control (era
+        // button, sort header); rebuilding the DOM synchronously here would
+        // detach that control mid-click and swallow it
+        setTimeout(refreshTrackingView, 0);   // KPI total + top-performer + derived columns stay consistent
       });
     });
     scope.querySelectorAll('[data-trkrow]').forEach(function (n) {
@@ -764,6 +932,7 @@ window.Ads = window.Ads || {};
           if (btn) { btn.disabled = false; btn.innerHTML = old; }
           Ads.toast('Sync failed: ' + err.message, true); return;
         }
+        eraSnaps = {};   // fresh events may have landed — round views refetch
         // adopt any server-side structure change FIRST — otherwise this sums
         // only the ad ids this browser happens to remember and silently
         // under-reports spend after a restructure
@@ -828,8 +997,12 @@ window.Ads = window.Ads || {};
             '</div>' +
           '</div>' +
           '<div><div class="card-head"><h3>Spend &amp; efficiency</h3></div>' +
-            '<div class="field"><label>Amount spent promoting this ad (' + esc(sym()) + ')</label>' +
-              '<input class="input" id="trk-det-spend" type="number" step="any" inputmode="decimal" value="' + (r.spend != null ? esc(r.spend) : '') + '" placeholder="0"></div>' +
+            // round view: Meta's windowed figure, display only — the editable
+            // field is the ALL-TIME manual number and must not be typed here
+            (trackUI.era !== 'all'
+              ? '<div class="field"><label>Spent this round (Meta)</label><div class="mc-val" style="font-size:2rem">' + money(r.spend) + '</div></div>'
+              : '<div class="field"><label>Amount spent promoting this ad (' + esc(sym()) + ')</label>' +
+                '<input class="input" id="trk-det-spend" type="number" step="any" inputmode="decimal" value="' + (r.spend != null ? esc(r.spend) : '') + '" placeholder="0"></div>') +
             '<div class="metric-grid" id="trk-det-derived">' + detCosts(r) + '</div>' +
             '<div class="card-head" style="margin-top:2rem"><h3>By source</h3></div>' + srcRows +
             (matched ? '<div class="btn-row" style="margin-top:2rem"><button class="btn is-ghost is-sm" id="trk-open-ad">Open ad in performance</button></div>' : '') +
@@ -853,19 +1026,21 @@ window.Ads = window.Ads || {};
             });
           }
         }
-        var sp = m.querySelector('#trk-det-spend');
-        function liveVal() { return sp.value === '' ? null : util.num(sp.value); }
-        // live feedback while typing — compute from the typed value, no store write
-        sp.addEventListener('input', function () {
-          m.querySelector('#trk-det-derived').innerHTML = costsFrom(mc, r.views, r.outs, liveVal());
-        });
-        // commit + refresh the leaderboard/KPIs only on change (blur/enter), like
-        // the inline table input — one store write, not one per keystroke, and the
-        // background view stays consistent so closing the modal never leaves it stale
-        sp.addEventListener('change', function () {
-          store.setTrackSpend(key, liveVal());
-          refreshTrackingView();
-        });
+        var sp = m.querySelector('#trk-det-spend');   // absent in round view (display-only spend)
+        if (sp) {
+          function liveVal() { return sp.value === '' ? null : util.num(sp.value); }
+          // live feedback while typing — compute from the typed value, no store write
+          sp.addEventListener('input', function () {
+            m.querySelector('#trk-det-derived').innerHTML = costsFrom(mc, r.views, r.outs, liveVal());
+          });
+          // commit + refresh the leaderboard/KPIs only on change (blur/enter), like
+          // the inline table input — one store write, not one per keystroke, and the
+          // background view stays consistent so closing the modal never leaves it stale
+          sp.addEventListener('change', function () {
+            store.setTrackSpend(key, liveVal());
+            refreshTrackingView();
+          });
+        }
         var oa = m.querySelector('#trk-open-ad');
         if (oa && matched) oa.addEventListener('click', function () { Ads.closeModal(); openAd(matched.id); });
       }
@@ -1990,7 +2165,15 @@ window.Ads = window.Ads || {};
               var runs = (rF.darkRuns || []).slice();
               if (rF.dark && rF.dark.campaignId && rF.dark.campaignId !== result.campaignId) runs.push(rF.dark);
               updateRound(pid, rid, {
-                dark: { campaignId: result.campaignId, adsetId: result.adsetId, split: !!result.split, budget: budget, days: dkDays, currency: conf.currency || 'USD', at: util.nowISO(), ads: result.ads },
+                dark: {
+                  campaignId: result.campaignId, adsetId: result.adsetId, split: !!result.split, budget: budget, days: dkDays, currency: conf.currency || 'USD', at: util.nowISO(), ads: result.ads,
+                  // round-filter metadata rides the current run: a re-post on
+                  // this round stays in the same era, and the eras map must
+                  // not vanish with the replaced run (adoptServerRuns corrects
+                  // both later if the server disagrees)
+                  era: (rF.dark && rF.dark.era) || undefined,
+                  eras: (rF.dark && rF.dark.eras) || undefined
+                },
                 darkRuns: runs
               });
               var actNum = String(conf.adAccountId || '').replace(/^act_/, '');

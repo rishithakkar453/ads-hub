@@ -1326,6 +1326,13 @@ function madsDarkRun(jobId, input) {
   function ledger(state) {
     if (!rid) return;
     var prev = madsRuns[rid];
+    // a NEW campaign replaces the current run — archive the old one into
+    // prevRuns (with its era tag) so round-filtered history survives
+    var prevRuns = (prev && prev.prevRuns) ? prev.prevRuns.slice() : [];
+    if (prev && prev.campaignId && out.campaignId && prev.campaignId !== out.campaignId &&
+        !prevRuns.some(function (x) { return x && x.campaignId === prev.campaignId; })) {
+      prevRuns.push({ campaignId: prev.campaignId, adsetId: prev.adsetId || '', split: !!prev.split, ads: prev.ads || {}, at: prev.at || Date.now(), era: prev.era });
+    }
     madsRuns[rid] = {
       campaignId: out.campaignId, adsetId: out.adsetId, split: split,
       // the plan this run was built for — a resume must match it exactly or
@@ -1339,6 +1346,12 @@ function madsDarkRun(jobId, input) {
       // it must survive a resume or a re-run, or the guarantee quietly lapses
       adCap: prev ? prev.adCap : undefined,
       capSweptAt: (prev && prev.campaignId === out.campaignId) ? prev.capSweptAt : 0,
+      // round-filter metadata: eras map + this run's tag must survive every
+      // rewrite, or the Live Tracking round views silently misattribute. A
+      // replacement campaign on the same round inherits its predecessor's era.
+      era: prev ? prev.era : undefined,
+      eras: prev ? prev.eras : undefined,
+      prevRuns: prevRuns.length ? prevRuns : undefined,
       at: Date.now(), state: state
     };
     saveMadsRuns();
@@ -1408,7 +1421,23 @@ function madsDarkRun(jobId, input) {
         if (verr || st === 'ARCHIVED' || st === 'DELETED') {
           note('the previous campaign was archived/deleted in Ads Manager — starting fresh…');
           reuse = null;
-          if (rid && madsRuns[rid]) { delete madsRuns[rid]; saveMadsRuns(); }
+          // blank only the dead campaign's fields — the eras metadata, this
+          // run's era tag and the archived-runs history must survive, or the
+          // round filter loses its labels and misattributes past rounds. The
+          // dead campaign itself moves into prevRuns: archived campaigns still
+          // answer insights queries, so its history stays aggregatable.
+          if (rid && madsRuns[rid]) {
+            var keepR = madsRuns[rid];
+            if (keepR.campaignId && keepR.ads) {
+              keepR.prevRuns = keepR.prevRuns || [];
+              if (!keepR.prevRuns.some(function (x) { return x && x.campaignId === keepR.campaignId; })) {
+                keepR.prevRuns.push({ campaignId: keepR.campaignId, adsetId: keepR.adsetId || '', split: !!keepR.split, ads: keepR.ads, at: keepR.at || Date.now(), era: keepR.era });
+              }
+            }
+            delete keepR.campaignId; delete keepR.adsetId; delete keepR.ads;
+            delete keepR.lastScale; delete keepR.capSweptAt;
+            saveMadsRuns();
+          }
         }
         proceed();
       });
@@ -2436,7 +2465,14 @@ function trackLog(ev) {
 // changes only manifest.json, and the cached output bakes in its names/slugs,
 // so without this the stats would show stale labels until the next event.
 var statsCache = { sig: '', out: null };
-function trackStats(cb) {
+// windowed stats ([since, until) on event ts) — small keyed memo, same
+// file-signature invalidation as the all-time cache
+var winStatsCache = {};
+var WIN_CACHE_MAX = 8;
+function trackStats(cb, win) {
+  // win = {since, until} (ms, until 0/absent = open-ended) → time-windowed
+  // aggregates for the round filter; omitted → all-time (original behavior)
+  var winKey = win ? (+win.since || 0) + ':' + (+win.until || 0) : null;
   fs.readdir(TRACK_DIR, function (err, names) {
     var files = (names || []).filter(function (n) { return /^events-\d{4}-\d{2}\.jsonl$/.test(n); }).sort();
     var sig = '';
@@ -2447,7 +2483,11 @@ function trackStats(cb) {
         var fp = path.join(TRACK_DIR, files[i]);
         return fs.stat(fp, function (e2, st) { sig += files[i] + ':' + (st ? st.size : 0) + ';'; i++; statNext(); });
       }
-      if (sig === statsCache.sig && statsCache.out) return cb(null, statsCache.out);
+      if (winKey) {
+        var wc = winStatsCache[winKey];
+        if (wc && wc.sig === sig && wc.out) return cb(null, wc.out);
+      }
+      else if (sig === statsCache.sig && statsCache.out) return cb(null, statsCache.out);
       var ads = {}, pages = {};
       function slot(map, k) {
         return map[k] || (map[k] = { clicks: 0, views: 0, seconds: 0, outs: 0, vids: {}, scrollSum: 0, scrollN: 0, bySrc: {} });
@@ -2485,7 +2525,13 @@ function trackStats(cb) {
             return out;
           }
           var result = { ads: finish(ads, true), pages: finish(pages, false), generatedAt: Date.now() };
-          statsCache.sig = sig; statsCache.out = result;
+          if (winKey) {
+            result.window = { since: +win.since || 0, until: +win.until || 0 };
+            var wkeys = Object.keys(winStatsCache);
+            if (wkeys.length >= WIN_CACHE_MAX) delete winStatsCache[wkeys[0]];
+            winStatsCache[winKey] = { sig: sig, out: result };
+          }
+          else { statsCache.sig = sig; statsCache.out = result; }
           return cb(null, result);
         }
         fs.readFile(path.join(TRACK_DIR, files[j]), 'utf8', function (e3, txt) {
@@ -2493,6 +2539,11 @@ function trackStats(cb) {
           (txt || '').split('\n').forEach(function (line) {
             if (!line) return;
             var ev; try { ev = JSON.parse(line); } catch (e4) { return; }
+            if (win) {
+              var ets = +ev.ts || 0;
+              if (ets < (+win.since || 0)) return;
+              if (+win.until > 0 && ets >= +win.until) return;
+            }
             var byAd = ev.k ? slot(ads, ev.k) : null;
             var byPg = ev.pg ? slot(pages, ev.pg) : null;
             [byAd, byPg].forEach(function (a) {
@@ -2675,10 +2726,14 @@ function handleTracking(req, res, pathname, parsed) {
   if (pathname === '/api/track/stats' && req.method === 'GET') {
     if (!rateOK(req, 'admin', 120)) return send(res, 429, ''), true;
     if (!requireTrackAuth(req, res)) return true;
+    // optional ?since=&until= (ms) → time-windowed aggregates (round filter)
+    var wSince = parseInt(parsed.query.since, 10) || 0;
+    var wUntil = parseInt(parsed.query.until, 10) || 0;
+    var winQ = (wSince > 0 || wUntil > 0) ? { since: wSince, until: wUntil } : null;
     trackStats(function (err, out) {
       if (err) return sendJSON(res, 500, { error: 'stats', message: String(err.message || err) });
       sendJSON(res, 200, out);
-    });
+    }, winQ);
     return true;
   }
 
@@ -3069,9 +3124,12 @@ var server = http.createServer(function (req, res) {
         campaignId: recR2.campaignId || '', adsetId: recR2.adsetId || '', split: !!recR2.split,
         ads: recR2.ads || {}, adCap: parseFloat(recR2.adCap) || 0,
         budget: recR2.budgetMinor != null ? recR2.budgetMinor / 100 : null,
-        endTime: recR2.endTime || '', at: recR2.at || 0
+        endTime: recR2.endTime || '', at: recR2.at || 0,
+        era: recR2.era || 1
       },
-      prevRuns: Array.isArray(recR2.prevRuns) ? recR2.prevRuns : []
+      prevRuns: Array.isArray(recR2.prevRuns) ? recR2.prevRuns : [],
+      // era metadata for the round filter: { "1": {label, startMs}, … }
+      eras: recR2.eras || null
     });
   }
   if (pathname === '/api/mads/cap' && req.method === 'GET') {

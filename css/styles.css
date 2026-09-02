@@ -458,6 +458,9 @@ select.select { appearance: none; -webkit-appearance: none; background-image: li
 
 /* Live Tracking ------------------------------------------------------------- */
 .trk-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1.6rem; flex-wrap: wrap; }
+/* round filter: All time / Round 1 / Round 2 */
+.trk-era { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
+.trk-era .btn { border-radius: 99px; }
 .trk-url { font-size: 1.2rem; background: var(--panel-3); padding: 0.2rem 0.7rem; border-radius: 0.5rem; }
 .trk-best { display: flex; align-items: center; gap: 1rem; }
 .trk-tbl th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
