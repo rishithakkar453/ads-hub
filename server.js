@@ -2482,7 +2482,14 @@ function trackLog(ev) {
   ev.ts = Date.now();
   var f = path.join(TRACK_DIR, 'events-' + new Date().toISOString().slice(0, 7) + '.jsonl');
   fs.mkdir(TRACK_DIR, { recursive: true }, function () {
-    fs.appendFile(f, JSON.stringify(ev) + '\n', function (e) { if (e) console.error('[track] log failed:', e.message); });
+    fs.appendFile(f, JSON.stringify(ev) + '\n', function (e) {
+      if (e) return console.error('[track] log failed:', e.message);
+      // two instances share this file across a container/host boundary with
+      // different users — a root-created 644 file silently locks the host
+      // instance out (20h of clicks were lost to exactly that). World-writable
+      // after every append is umask- and creator-proof.
+      fs.chmod(f, 438, function () {});
+    });
   });
 }
 
