@@ -2451,6 +2451,33 @@ function saveTrackManifest() {
     fs.writeFileSync(path.join(TRACK_DIR, 'manifest.json'), JSON.stringify(trackManifest()));
   } catch (e) { console.error('[track] manifest save failed:', e.message); }
 }
+// destination overrides: { campaign: 'utm_campaign value', ads: { adKey: 'https://…' } }
+// Edited out-of-band (no in-process writer), so cache by mtime and re-stat at
+// most every 15s — the ad hot path must never pay a parse per click, but an
+// edit must take effect without a restart.
+var trackDestCache = { at: 0, mtime: -1, out: { ads: {} } };
+function trackDest() {
+  var now = Date.now();
+  if (now - trackDestCache.at < 15000) return trackDestCache.out;
+  trackDestCache.at = now;
+  var fp = path.join(TRACK_DIR, 'dest.json');
+  var mt = 0;
+  try { mt = fs.statSync(fp).mtimeMs; } catch (e) { mt = 0; }
+  if (mt === trackDestCache.mtime) return trackDestCache.out;
+  trackDestCache.mtime = mt;
+  var out = { ads: {} };
+  if (mt) {
+    try {
+      var j = JSON.parse(fs.readFileSync(fp, 'utf8'));
+      if (j && typeof j === 'object') {
+        if (typeof j.campaign === 'string') out.campaign = j.campaign.slice(0, 60);
+        if (j.ads && typeof j.ads === 'object') out.ads = j.ads;
+      }
+    } catch (e) { console.error('[track] dest.json unreadable — landing pages stay in effect:', e.message); }
+  }
+  trackDestCache.out = out;
+  return out;
+}
 function trackLog(ev) {
   ev.ts = Date.now();
   var f = path.join(TRACK_DIR, 'events-' + new Date().toISOString().slice(0, 7) + '.jsonl');
@@ -2605,6 +2632,22 @@ function handleTracking(req, res, pathname, parsed) {
     var isBot = /facebookexternalhit|meta-externalagent|facebookcatalog|bot|crawler|spider|preview|curl|wget|python|axios|headless/i.test(rawUA) ||
       /prefetch|preview/i.test(String(req.headers['sec-purpose'] || req.headers.purpose || req.headers['x-purpose'] || ''));
     trackLog({ t: 'click', k: akey, pg: entry.slug, s: src, ref: hostOf(req.headers.referer), ua: uaClass(req.headers['user-agent']), bot: isBot ? 1 : 0 });
+    // destination override (data/track/dest.json): ads listed there skip the
+    // interstitial landing page and go STRAIGHT to the real site, carrying
+    // the ad's key as utm_content/aid so site-side analytics attribute it.
+    // Click logging above is identical either way. Delete the entry (or the
+    // file) to fall back to the landing page — no restart needed.
+    var dst = trackDest();
+    var dstUrl = dst.ads && dst.ads[akey];
+    if (typeof dstUrl === 'string' && /^https:\/\/[a-z0-9.-]+/i.test(dstUrl)) {
+      var q2 = 'utm_source=' + encodeURIComponent(src || 'ig') +
+        '&utm_medium=paid' +
+        (dst.campaign ? '&utm_campaign=' + encodeURIComponent(dst.campaign) : '') +
+        '&utm_content=' + encodeURIComponent(akey) +
+        '&aid=' + encodeURIComponent(akey) + (src ? '&s=' + encodeURIComponent(src) : '');
+      var loc0 = dstUrl + (dstUrl.indexOf('?') >= 0 ? '&' : '?') + q2;
+      return send(res, 302, 'Redirecting…', { Location: loc0, 'Cache-Control': 'no-store' }), true;
+    }
     var loc = '/p/' + entry.slug + '/?aid=' + akey + (src ? '&s=' + src : '');
     return send(res, 302, 'Redirecting…', { Location: loc, 'Cache-Control': 'no-store' }), true;
   }
